@@ -1,0 +1,12 @@
+Edge-Drop for macOS
+Copyright 2026 Andres Gonzalez
+
+This product is an unofficial macOS port based on Edge-Drop:
+https://github.com/Deepender25/Edge-Drop
+
+Edge-Drop was created and is maintained by Deepender25. The original project
+is licensed under the Apache License, Version 2.0. This port contains substantial
+new Tauri, Rust, AppKit, and macOS-specific implementation work.
+
+The Edge-Drop name and upstream project identity are used to describe the origin
+and compatibility goal of this port. No upstream endorsement is implied.

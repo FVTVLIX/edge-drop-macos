@@ -1,0 +1,38 @@
+{
+  "name": "mac-edge-drop",
+  "version": "0.1.0",
+  "description": "Edge-Drop for macOS — a clipboard shelf that lives on the edge of your screen",
+  "author": "Andres Gonzalez",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FVTVLIX/edge-drop-macos.git"
+  },
+  "homepage": "https://github.com/FVTVLIX/edge-drop-macos#readme",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.4.1",
+    "@tauri-apps/plugin-clipboard-manager": "^2.2.2",
+    "@tauri-apps/plugin-global-shortcut": "^2.2.0",
+    "@tauri-apps/plugin-shell": "^2.2.1",
+    "framer-motion": "^11.0.24",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.4.1",
+    "@types/react": "^18.2.73",
+    "@types/react-dom": "^18.2.22",
+    "@vitejs/plugin-react": "^4.2.1",
+    "typescript": "^5.4.3",
+    "vite": "^5.2.6"
+  }
+}
