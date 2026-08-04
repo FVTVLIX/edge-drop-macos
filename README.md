@@ -1,8 +1,8 @@
-# Edge-Drop for macOS
+# Edge Drop for macOS
 
 > An unofficial macOS port of [Deepender25/Edge-Drop](https://github.com/Deepender25/Edge-Drop), rebuilt with Tauri and Rust.
 
-Edge-Drop for macOS is a hover-activated clipboard shelf that lives at the edge of the screen. It preserves the original project's core workflow—collect content once, then drag or copy it directly into another app—while replacing Windows-specific Electron and Win32 integrations with native macOS pasteboard, window, and drag behavior.
+Edge Drop for macOS is a hover-activated clipboard shelf that lives at the edge of the screen. It preserves the original project's core workflow—collect content once, then drag or copy it directly into another app—while replacing Windows-specific Electron and Win32 integrations with native macOS pasteboard, window, and drag behavior.
 
 This port is under active development. It is not currently an official release of the upstream Edge-Drop project.
 

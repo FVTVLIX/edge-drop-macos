@@ -9,7 +9,7 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-    let quit_item = MenuItemBuilder::with_id("quit", "Quit Mac Edge-Drop").build(app)?;
+    let quit_item = MenuItemBuilder::with_id("quit", "Quit Edge Drop").build(app)?;
     let toggle_item = MenuItemBuilder::with_id("toggle", "Show/Hide Panel").build(app)?;
     let clear_item = MenuItemBuilder::with_id("clear", "Clear Unpinned Items").build(app)?;
 
@@ -22,7 +22,7 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
 
     let _tray = TrayIconBuilder::new()
         .menu(&menu)
-        .tooltip("Mac Edge-Drop")
+        .tooltip("Edge Drop")
         .on_menu_event(|app_handle, event| match event.id().as_ref() {
             "quit" => {
                 let state = app_handle.state::<Arc<AppState>>();

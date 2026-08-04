@@ -114,7 +114,7 @@ export function Settings({ settings, onUpdate, onClose, onReset }: SettingsProps
     >
       <div className="settings-title-row">
         <div>
-          <span>Edge-Drop</span>
+          <span>Edge Drop</span>
           <h2>Settings</h2>
         </div>
         <span className="settings-saved"><i /> Changes save automatically</span>

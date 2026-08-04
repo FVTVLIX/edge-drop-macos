@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicedoc/tauri/dev/crates/tauri-config-schema/schema.json",
-  "productName": "Mac Edge-Drop",
+  "productName": "Edge Drop",
   "version": "0.1.0",
   "identifier": "com.andresgonzalez.mac-edge-drop",
   "build": {
@@ -15,7 +15,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Mac Edge-Drop",
+        "title": "Edge Drop",
         "width": 384,
         "height": 600,
         "x": 0,
@@ -37,6 +37,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "macOS": {
+      "bundleName": "Edge Drop"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

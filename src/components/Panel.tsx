@@ -257,7 +257,7 @@ export function Panel() {
           {/* Header */}
           <div className="header">
             <div className="header-left">
-              <img src={`/logo.svg?v=${Date.now()}`} alt="Edge-Drop" style={{ width: 28, height: 28 }} />
+              <img src={`/logo.svg?v=${Date.now()}`} alt="Edge Drop" style={{ width: 28, height: 28 }} />
             </div>
             <div className="header-actions">
               {items.length > 0 && (
