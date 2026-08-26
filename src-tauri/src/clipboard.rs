@@ -62,6 +62,17 @@ impl ClipboardWatcher {
         self.baseline_pending = true;
     }
 
+    /// After click-to-paste, accept a genuine re-copy of the same payload as a
+    /// new clipboard event even though its content signature is unchanged.
+    pub fn invalidate_after_paste(&mut self) {
+        self.self_write_in_progress = false;
+        self.baseline_pending = false;
+        self.last_change_count = pasteboard_change_count();
+        self.last_signature = Some("__post-paste__".to_string());
+        self.pending_change_count = None;
+        self.pending_since = None;
+    }
+
     fn set_baseline(&mut self, change_count: i64, signature: Option<String>) {
         self.last_change_count = change_count;
         self.last_signature = signature;
@@ -261,7 +272,12 @@ fn read_snapshot(clip: &mut arboard::Clipboard) -> ClipboardSnapshot {
         return ClipboardSnapshot::Files(files);
     }
 
-    let text = clip.get().text().unwrap_or_default().trim().to_string();
+    let text = clip
+        .get()
+        .text()
+        .unwrap_or_default()
+        .trim_matches(['\r', '\n'])
+        .to_string();
     let html = clip
         .get()
         .html()

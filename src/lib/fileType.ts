@@ -18,6 +18,8 @@ export type FileKind =
   | 'audio'
   | 'video'
   | 'image'
+  | 'executable'
+  | 'folder'
   | 'file' // generic fallback
 
 export interface FileKindInfo {
@@ -42,21 +44,25 @@ const EXT_MAP: Record<string, FileKind> = {
   mp3: 'audio', wav: 'audio', flac: 'audio', aac: 'audio', ogg: 'audio', m4a: 'audio', wma: 'audio',
   mp4: 'video', mkv: 'video', avi: 'video', mov: 'video', wmv: 'video', flv: 'video', webm: 'video', m4v: 'video',
   png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', bmp: 'image', svg: 'image', avif: 'image', ico: 'image',
-  tif: 'image', tiff: 'image', jfif: 'image', pjpeg: 'image', pjp: 'image'
+  tif: 'image', tiff: 'image', jfif: 'image', pjpeg: 'image', pjp: 'image',
+  exe: 'executable', msi: 'executable', bat: 'executable', cmd: 'executable', ps1: 'executable',
+  apk: 'executable', app: 'executable', dll: 'executable', pkg: 'executable'
 }
 
 const KIND_INFO: Record<FileKind, FileKindInfo> = {
-  pdf: { kind: 'pdf', label: 'PDF', color: '#E53935' },
-  word: { kind: 'word', label: 'Word', color: '#2B579A' },
-  excel: { kind: 'excel', label: 'Excel', color: '#217346' },
-  powerpoint: { kind: 'powerpoint', label: 'Slides', color: '#D24726' },
-  archive: { kind: 'archive', label: 'Archive', color: '#B0621A' },
-  text: { kind: 'text', label: 'Text', color: '#9AA0A6' },
-  code: { kind: 'code', label: 'Code', color: '#26A69A' },
-  audio: { kind: 'audio', label: 'Audio', color: '#8E44AD' },
-  video: { kind: 'video', label: 'Video', color: '#8E44AD' },
-  image: { kind: 'image', label: 'Image', color: '#E91E63' },
-  file: { kind: 'file', label: 'File', color: '#9AA0A6' }
+  pdf: { kind: 'pdf', label: 'PDF', color: '#FF7C8E' },
+  word: { kind: 'word', label: 'Word', color: '#7BAFF8' },
+  excel: { kind: 'excel', label: 'Excel', color: '#52D7A4' },
+  powerpoint: { kind: 'powerpoint', label: 'Slides', color: '#FFA25B' },
+  archive: { kind: 'archive', label: 'Archive', color: '#FBBF24' },
+  text: { kind: 'text', label: 'Text', color: '#8CA77B' },
+  code: { kind: 'code', label: 'Code', color: '#53CAF7' },
+  audio: { kind: 'audio', label: 'Audio', color: '#C495FD' },
+  video: { kind: 'video', label: 'Video', color: '#64748B' },
+  image: { kind: 'image', label: 'Image', color: '#BA9B7B' },
+  executable: { kind: 'executable', label: 'App', color: '#93A4FC' },
+  folder: { kind: 'folder', label: 'Folder', color: '#FBBF24' },
+  file: { kind: 'file', label: 'File', color: '#B0C0D0' }
 }
 
 /** Extract the lowercase extension (no dot) from a path. */
@@ -68,14 +74,16 @@ export function extOf(path: string): string {
 }
 
 /** Resolve a file path to its display metadata (kind / label / color). */
-export function getFileKind(path: string): FileKindInfo {
+export function getFileKind(path: string, isDirectory = false): FileKindInfo {
+  if (isDirectory) return KIND_INFO.folder
   const ext = extOf(path)
   const kind = EXT_MAP[ext] ?? 'file'
   return KIND_INFO[kind]
 }
 
 /** Resolve from an already-extracted extension string. */
-export function getFileKindByExt(ext: string): FileKindInfo {
+export function getFileKindByExt(ext: string, isDirectory = false): FileKindInfo {
+  if (isDirectory || ext.toLowerCase() === 'folder') return KIND_INFO.folder
   const kind = EXT_MAP[ext.toLowerCase()] ?? 'file'
   return KIND_INFO[kind]
 }

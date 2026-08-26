@@ -1,5 +1,5 @@
 [package]
-name = "mac-edge-drop"
+name = "edge-drop"
 version = "0.1.0"
 description = "Edge Drop for macOS — clipboard shelf on the edge of your screen"
 authors = ["Andres Gonzalez"]
@@ -8,7 +8,7 @@ license = "Apache-2.0"
 repository = "https://github.com/FVTVLIX/edge-drop-macos"
 
 [lib]
-name = "mac_edge_drop_lib"
+name = "edge_drop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -33,6 +33,9 @@ drag = "2.1.1"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.24"
 objc2 = "0.6.4"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSPasteboard", "NSPasteboardItem"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSPasteboard", "NSPasteboardItem", "NSResponder"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSData", "NSString", "NSURL"] }
+tauri-plugin-autostart = "2"

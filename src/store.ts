@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { TypeFilter } from "./lib/filterItems";
 
 export interface ClipboardItem {
   id: string;
@@ -48,14 +49,21 @@ interface AppState {
   setDragActive: (active: boolean) => void;
   query: string;
   setQuery: (q: string) => void;
+  typeFilter: TypeFilter;
+  setTypeFilter: (filter: TypeFilter) => void;
   internalDragReq: DragRequest | null;
   setInternalDragReq: (req: DragRequest | null) => void;
+  previewItemId: string | null;
+  previewItemRect: DOMRect | null;
+  openPreview: (id: string, rect: DOMRect) => void;
+  closePreview: () => void;
   toasts: ToastMessage[];
   pushToast: (message: string, tone?: ToastMessage["tone"]) => void;
   dismissToast: (id: string) => void;
   togglePin: (id: string, pinned: boolean) => void;
   deleteItem: (id: string) => void;
-  clearItems: () => void;
+  deleteItems: (ids: string[]) => Promise<void>;
+  clearItems: (ids?: string[]) => Promise<void>;
   mergeItems: (sourceId: string, targetId: string) => Promise<void>;
   splitItem: (id: string, imageId?: string, paths?: string[]) => Promise<void>;
 }
@@ -71,8 +79,14 @@ export const useAppStore = create<AppState>((set) => ({
   setDragActive: (active) => set({ dragActive: active }),
   query: "",
   setQuery: (q) => set({ query: q }),
+  typeFilter: "all",
+  setTypeFilter: (typeFilter) => set({ typeFilter }),
   internalDragReq: null,
   setInternalDragReq: (req) => set({ internalDragReq: req }),
+  previewItemId: null,
+  previewItemRect: null,
+  openPreview: (id, rect) => set({ previewItemId: id, previewItemRect: rect }),
+  closePreview: () => set({ previewItemId: null, previewItemRect: null }),
   toasts: [],
   pushToast: (message, tone = "info") => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -100,13 +114,52 @@ export const useAppStore = create<AppState>((set) => ({
       items: s.items.filter((i) => i.id !== id),
     }));
   },
-  clearItems: () => {
-    import("@tauri-apps/api/core").then(({ invoke }) =>
-      invoke("clear_items")
-    );
-    set((s) => ({
-      items: s.items.filter((i) => i.pinned),
-    }));
+  deleteItems: async (ids) => {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    let previous: ClipboardItem[] = [];
+    set((state) => {
+      previous = state.items;
+      return { items: state.items.filter((item) => !idSet.has(item.id)) };
+    });
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("delete_items", { ids });
+    } catch (error) {
+      set({ items: previous });
+      throw error;
+    }
+  },
+  clearItems: async (ids) => {
+    if (ids) {
+      if (ids.length === 0) return;
+      const idSet = new Set(ids);
+      let previous: ClipboardItem[] = [];
+      set((state) => {
+        previous = state.items;
+        return { items: state.items.filter((item) => !idSet.has(item.id)) };
+      });
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("delete_items", { ids });
+      } catch (error) {
+        set({ items: previous });
+        throw error;
+      }
+      return;
+    }
+    let previous: ClipboardItem[] = [];
+    set((state) => {
+      previous = state.items;
+      return { items: state.items.filter((item) => item.pinned) };
+    });
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("clear_items");
+    } catch (error) {
+      set({ items: previous });
+      throw error;
+    }
   },
   mergeItems: async (sourceId, targetId) => {
     const { invoke } = await import("@tauri-apps/api/core");

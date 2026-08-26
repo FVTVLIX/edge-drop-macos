@@ -3,8 +3,20 @@ import { useRef, useEffect, useState } from "react";
 import { useAppStore } from "../store";
 import { ClipboardCard } from "./ClipboardCard";
 import { Settings } from "./Settings";
+import { PreviewFlyout } from "./PreviewFlyout";
+import { ClearMenu } from "./ClearMenu";
 import { DEFAULT_SETTINGS, SettingsData } from "../settings";
 import { GearIcon, ChevronUpIcon, ChevronDownIcon } from "./icons";
+import { filterItems } from "../lib/filterItems";
+import type { TypeFilter } from "../lib/filterItems";
+
+const TYPE_FILTERS: { id: TypeFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "text", label: "Text" },
+  { id: "links", label: "Links" },
+  { id: "images", label: "Images" },
+  { id: "files", label: "Files" },
+];
 
 export function Panel() {
   const open = useAppStore((s) => s.isOpen);
@@ -14,44 +26,46 @@ export function Panel() {
   const setDragActive = useAppStore((s) => s.setDragActive);
   const query = useAppStore((s) => s.query);
   const setQuery = useAppStore((s) => s.setQuery);
+  const typeFilter = useAppStore((s) => s.typeFilter);
+  const setTypeFilter = useAppStore((s) => s.setTypeFilter);
   const setItems = useAppStore((s) => s.setItems);
   const internalDragReq = useAppStore((s) => s.internalDragReq);
   const toasts = useAppStore((s) => s.toasts);
   const pushToast = useAppStore((s) => s.pushToast);
-  const pinnedItems = items.filter((i) => i.pinned);
-  const recentItems = items.filter((i) => !i.pinned);
-
-  // Filter by search query
-  const filteredPinned = pinnedItems.filter((i) =>
-    i.data.kind === "text" ? i.data.text.toLowerCase().includes(query.toLowerCase()) : true
-  );
-  const filteredRecent = recentItems.filter((i) =>
-    i.data.kind === "text" ? i.data.text.toLowerCase().includes(query.toLowerCase()) : true
-  );
-  const [pinnedCollapsed, setPinnedCollapsed] = useState(true);
+  const closePreview = useAppStore((s) => s.closePreview);
+  const pinnedItems = items.filter((item) => item.pinned);
+  const recentItems = items.filter((item) => !item.pinned);
+  const filteredPinned = filterItems(pinnedItems, query, typeFilter);
+  const filteredRecent = filterItems(recentItems, query, typeFilter);
+  const visibleCount = filteredPinned.length + filteredRecent.length;
+  const [pinnedCollapsedByFilter, setPinnedCollapsedByFilter] = useState<Record<TypeFilter, boolean>>(() => {
+    const fallback = { all: true, text: true, links: true, images: true, files: true };
+    try {
+      return { ...fallback, ...JSON.parse(localStorage.getItem("edge_drop_pinned_collapsed_map") || "{}") };
+    } catch {
+      return fallback;
+    }
+  });
+  const pinnedCollapsed = pinnedCollapsedByFilter[typeFilter];
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<SettingsData>(DEFAULT_SETTINGS);
   const [settingsReady, setSettingsReady] = useState(false);
-  const [confirmClear, setConfirmClear] = useState(false);
+
+  const togglePinnedCollapsed = () => {
+    setPinnedCollapsedByFilter((current) => ({
+      ...current,
+      [typeFilter]: !current[typeFilter],
+    }));
+  };
 
   useEffect(() => {
-    if (!confirmClear) return;
-    const cancelConfirmation = () => setConfirmClear(false);
-    const timeout = window.setTimeout(cancelConfirmation, 6000);
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") cancelConfirmation();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.clearTimeout(timeout);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [confirmClear]);
+    localStorage.setItem("edge_drop_pinned_collapsed_map", JSON.stringify(pinnedCollapsedByFilter));
+  }, [pinnedCollapsedByFilter]);
 
   useEffect(() => {
-    if (!open || items.length === 0) setConfirmClear(false);
-  }, [open, items.length]);
+    if (!open) closePreview();
+  }, [open, items.length, closePreview]);
 
   useEffect(() => {
     import("@tauri-apps/api/core")
@@ -70,8 +84,16 @@ export function Panel() {
     if (!settingsReady) return;
     const timer = window.setTimeout(() => {
       import("@tauri-apps/api/core")
-        .then(({ invoke }) => invoke("update_settings", { settings }))
-        .catch((error) => pushToast(`Couldn't save settings: ${String(error)}`, "error"));
+        .then(async ({ invoke }) => {
+          try {
+            await invoke("update_settings", { settings });
+          } catch (error) {
+            pushToast(`Couldn't save settings: ${String(error)}`, "error");
+            const persisted = await invoke<SettingsData>("get_settings");
+            setSettings(persisted);
+          }
+        })
+        .catch((error) => pushToast(`Couldn't reload settings: ${String(error)}`, "error"));
     }, 120);
     return () => window.clearTimeout(timer);
   }, [settings, settingsReady, pushToast]);
@@ -153,25 +175,43 @@ export function Panel() {
 
   // Scroll to top when new items appear while open
   const prevTopId = useRef(topRecentId);
+  const previousItemCount = useRef(items.length);
   useEffect(() => {
-    if (open && topRecentId !== prevTopId.current) {
+    const itemWasAddedOrPromoted = items.length >= previousItemCount.current;
+    if (open && itemWasAddedOrPromoted && topRecentId !== prevTopId.current) {
       listRef.current?.scrollTo({ top: 0 });
     }
     prevTopId.current = topRecentId;
-  }, [open, topRecentId]);
+    previousItemCount.current = items.length;
+  }, [open, topRecentId, items.length]);
 
-  const topOffset = "50%";
+  const panelHeightPx = window.innerHeight * settings.panelHeight;
+  const panelTopPx = (window.innerHeight - panelHeightPx) * settings.verticalOffset;
+  const topOffset = `${panelTopPx + panelHeightPx / 2}px`;
   const triggerHeightPx = window.innerHeight * settings.hotZoneHeight;
-  const halfTrigger = triggerHeightPx / 2;
+  const triggerTopPx = Math.max(0, Math.min(
+    window.innerHeight - triggerHeightPx,
+    settings.triggerAlignment === "top"
+      ? panelTopPx
+      : settings.triggerAlignment === "bottom"
+        ? panelTopPx + panelHeightPx - triggerHeightPx
+        : panelTopPx + (panelHeightPx - triggerHeightPx) / 2
+  ));
   const panelHeightStr = `${Math.round(settings.panelHeight * 100)}vh`;
+  const isRight = settings.edgePosition === "right";
 
   const clipPath = open
-    ? "inset(-100px -100px -100px 0px round 0px 24px 24px 0px)"
-    : `inset(${window.innerHeight / 2 - halfTrigger}px ${window.innerWidth - settings.hotZoneWidth}px ${window.innerHeight / 2 - halfTrigger}px 0px round 0px 24px 24px 0px)`;
+    ? "inset(-100px -100px -100px -100px round 24px)"
+    : isRight
+      ? `inset(${triggerTopPx}px 0px ${window.innerHeight - triggerTopPx - triggerHeightPx}px ${384 - settings.hotZoneWidth}px round 24px 0px 0px 24px)`
+      : `inset(${triggerTopPx}px ${384 - settings.hotZoneWidth}px ${window.innerHeight - triggerTopPx - triggerHeightPx}px 0px round 0px 24px 24px 0px)`;
 
   return (
     <MotionConfig reducedMotion={settings.reduceMotion ? "always" : "never"}>
-    <div className={`root ${settings.uiStyle === "compact" ? "compact" : ""}${settings.reduceMotion ? " reduce-motion" : ""}`}>
+    <div
+      className={`root ${isRight ? "edge-right" : "edge-left"} ${settings.uiStyle === "compact" ? "compact" : ""}${settings.reduceMotion ? " reduce-motion" : ""}`}
+      style={{ "--font-scale": settings.fontSizeScale } as React.CSSProperties}
+    >
       <motion.div
         className="blade-container"
         initial={false}
@@ -179,20 +219,21 @@ export function Panel() {
           position: "absolute",
           top: topOffset,
           y: "-50%",
-          left: 0,
+          left: isRight ? undefined : 0,
+          right: isRight ? 0 : undefined,
           zIndex: 10,
           pointerEvents: open ? "auto" : "none",
-          originX: 0,
+          originX: isRight ? 1 : 0,
           originY: 0.5,
           clipPath,
         }}
         animate={{
-          scale: open ? [0.94, 1.02, 0.99, 1] : 1,
+          scale: open && settings.bounceAnimation ? [0.94, 1.02, 0.99, 1] : 1,
           filter: open ? "blur(0px)" : "blur(16px)",
         }}
         transition={{
           scale: {
-            duration: 0.55,
+            duration: settings.bounceAnimation ? 0.55 : 0.22,
             ease: [0.22, 1, 0.36, 1],
           },
           filter: {
@@ -280,7 +321,10 @@ export function Panel() {
                   }}
                 />
               )}
-              <button className="act" title="Settings" onClick={() => setSettingsOpen(!settingsOpen)}>
+              <button className="act" title="Settings" onClick={() => {
+                closePreview();
+                setSettingsOpen(!settingsOpen);
+              }}>
                 <GearIcon width={16} height={16} />
               </button>
               <span className="count" style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", fontWeight: 500 }}>
@@ -289,7 +333,26 @@ export function Panel() {
             </div>
           </div>
 
-          <AnimatePresence initial={false}>
+          {!settingsOpen && items.length > 0 && (
+            <div className="type-filter-track" role="tablist" aria-label="Filter clipboard items by type">
+              {TYPE_FILTERS.map((filter) => (
+                <button
+                  key={filter.id}
+                  role="tab"
+                  aria-selected={typeFilter === filter.id}
+                  className={`type-filter-chip${typeFilter === filter.id ? " active" : ""}`}
+                  onClick={() => {
+                    closePreview();
+                    setTypeFilter(filter.id);
+                  }}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <AnimatePresence mode="wait">
             {toasts.length > 0 && (
               <motion.div
                 className="toast-stack"
@@ -314,7 +377,7 @@ export function Panel() {
           </AnimatePresence>
 
           {/* Content: toggle between Settings and ItemList */}
-          <AnimatePresence mode="wait">
+          <AnimatePresence initial={false}>
             {settingsOpen ? (
               <Settings
                 key="settings"
@@ -335,19 +398,26 @@ export function Panel() {
                 and it appears here instantly.
               </div>
               <div className="empty-hint">
-                Move your cursor to the left edge to open
+                Move your cursor to the {settings.edgePosition} edge to open
               </div>
             </div>
           ) : (
             <motion.div className="list" ref={listRef} layoutScroll
               onScroll={(e) => setShowScrollTop(e.currentTarget.scrollTop > 50)}
             >
+              {visibleCount === 0 && (
+                <div className="filter-empty-state">
+                  <strong>No matching items</strong>
+                  <span>Try another type or search term.</span>
+                </div>
+              )}
+
               {/* Pinned section */}
-              {pinnedItems.length > 0 && (
+              {filteredPinned.length > 0 && (
                 <section className="pinned-section">
                   <div
                     className="section-label pinned-header-interactive"
-                    onClick={() => setPinnedCollapsed(!pinnedCollapsed)}
+                    onClick={togglePinnedCollapsed}
                   >
                     <div className="pinned-header-left">
                       <span>Pinned</span>
@@ -372,9 +442,9 @@ export function Panel() {
               )}
 
               {/* Recent section */}
-              {recentItems.length > 0 && (
+              {filteredRecent.length > 0 && (
                 <section>
-                  {pinnedItems.length > 0 && (
+                  {filteredPinned.length > 0 && (
                     <div className="section-label">Recent</div>
                   )}
                   <AnimatePresence initial={false}>
@@ -406,56 +476,36 @@ export function Panel() {
           {/* Footer */}
           <div className="footer">
             <span className="count">
-              {items.length} item{items.length !== 1 ? "s" : ""}
+              {visibleCount === items.length
+                ? `${items.length} item${items.length !== 1 ? "s" : ""}`
+                : `${visibleCount} of ${items.length}`}
             </span>
             <div className="spacer" />
-            <AnimatePresence initial={false} mode="wait">
-              {confirmClear ? (
-                <motion.div
-                  key="confirm-clear"
-                  className="clear-confirm"
-                  initial={{ opacity: 0, scale: 0.9, x: 6 }}
-                  animate={{ opacity: 1, scale: 1, x: 0 }}
-                  exit={{ opacity: 0, scale: 0.9, x: 6 }}
-                  transition={{ duration: 0.14 }}
-                >
-                  <span>Clear shelf?</span>
-                  <button className="delete-choice cancel" onClick={() => setConfirmClear(false)}>
-                    No
-                  </button>
-                  <button
-                    className="delete-choice confirm"
-                    onClick={() => {
-                      clearItems();
-                      setConfirmClear(false);
-                    }}
-                  >
-                    Yes
-                  </button>
-                </motion.div>
-              ) : (
-                <motion.button
-                  key="request-clear"
-                  className="text-btn danger"
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
-                  transition={{ duration: 0.12 }}
-                  onClick={() => setConfirmClear(true)}
-                  disabled={items.length === 0}
-                  title="Clear shelf"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                  </svg>
-                  <span>Clear</span>
-                </motion.button>
-              )}
-            </AnimatePresence>
+            <ClearMenu
+              items={[...filteredPinned, ...filteredRecent]}
+              disabled={filteredRecent.length === 0}
+              panelOpen={open}
+              scoped={typeFilter !== "all" || query.trim().length > 0}
+              onClear={async (ids) => {
+                try {
+                  await clearItems(ids);
+                } catch (error) {
+                  pushToast(`Couldn't clear history: ${String(error)}`, "error");
+                }
+              }}
+              onClearAll={async () => {
+                try {
+                  const scoped = typeFilter !== "all" || query.trim().length > 0;
+                  await clearItems(scoped ? filteredRecent.map((item) => item.id) : undefined);
+                } catch (error) {
+                  pushToast(`Couldn't clear history: ${String(error)}`, "error");
+                }
+              }}
+            />
           </div>
         </div>
       </motion.div>
+      {open && !settingsOpen && <PreviewFlyout isRight={isRight} panelHeight={panelHeightPx} />}
     </div>
     </MotionConfig>
   );

@@ -75,15 +75,20 @@ function mergeFamily(item: ClipboardItem): "images" | "files" | "text" {
 export const ClipboardCard = memo(function ClipboardCard({ item }: Props) {
   const togglePin = useAppStore((state) => state.togglePin);
   const deleteItem = useAppStore((state) => state.deleteItem);
-  const splitItem = useAppStore((state) => state.splitItem);
   const pushToast = useAppStore((state) => state.pushToast);
   const setInternalDragReq = useAppStore((state) => state.setInternalDragReq);
   const internalDragReq = useAppStore((state) => state.internalDragReq);
   const items = useAppStore((state) => state.items);
   const open = useAppStore((state) => state.isOpen);
+  const openPreview = useAppStore((state) => state.openPreview);
   const [copied, setCopied] = useState(false);
-  const [expanded, setExpanded] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [, setTimeTick] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setTimeTick((tick) => tick + 1), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const isBundle =
     (item.data.kind === "files" && item.data.paths.length > 1) ||
@@ -102,7 +107,6 @@ export const ClipboardCard = memo(function ClipboardCard({ item }: Props) {
 
   useEffect(() => {
     if (!open) {
-      setExpanded(false);
       setConfirmDelete(false);
     }
   }, [open]);
@@ -161,31 +165,30 @@ export const ClipboardCard = memo(function ClipboardCard({ item }: Props) {
       layout
       initial={open ? { opacity: 0, y: 8, scale: 0.98 } : false}
       animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.14 } }}
+      exit={{
+        opacity: 0,
+        scale: 0.96,
+        height: 0,
+        marginBottom: 0,
+        transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] },
+      }}
       transition={{ type: "spring", stiffness: 420, damping: 34 }}
       className={`item${item.pinned ? " pinned" : ""}${isBundle ? " bundle" : ""}${isDragSource ? " drag-source" : ""}${isMergeTarget ? " merge-ready" : ""}`}
     >
       <div
         className="item-main"
         data-id={item.id}
-        draggable={!isBundle || !expanded}
+        draggable
         onDragStart={(event) => handleDragStart(event, { id: item.id })}
-        onClick={isBundle && !expanded ? (event) => {
+        onClick={(event) => {
           event.stopPropagation();
-          setExpanded(true);
-        } : undefined}
-        title={isBundle && !expanded ? "Click to open stack; drag to copy it out" : "Drag to copy out"}
+          openPreview(item.id, event.currentTarget.getBoundingClientRect());
+        }}
+        title="Click for a larger preview; drag to copy out"
       >
         <div className="body">
           {isBundle ? (
-            <BundleContent
-              item={item}
-              expanded={expanded}
-              onCollapse={() => setExpanded(false)}
-              onDragStart={handleDragStart}
-              onCopy={copyItem}
-              onSplit={(imageId, paths) => splitItem(item.id, imageId, paths)}
-            />
+            <CollapsedStack item={item} />
           ) : (
             <SinglePreview item={item} />
           )}
@@ -200,8 +203,7 @@ export const ClipboardCard = memo(function ClipboardCard({ item }: Props) {
           </div>
         </div>
 
-        {!expanded && (
-          <motion.div
+        <motion.div
             layout
             className={`actions${confirmDelete ? " confirming-delete" : ""}`}
             onClick={(event) => event.stopPropagation()}
@@ -262,8 +264,7 @@ export const ClipboardCard = memo(function ClipboardCard({ item }: Props) {
                 </motion.button>
               )}
             </AnimatePresence>
-          </motion.div>
-        )}
+        </motion.div>
       </div>
     </motion.div>
   );

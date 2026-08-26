@@ -197,6 +197,7 @@ const GLYPHS: Record<string, (p: P) => JSX.Element> = {
   audio: AudioGlyph,
   video: VideoGlyph,
   image: PhotoGlyph,
+  executable: FileIconGlyph,
   folder: FolderGlyph,
   file: FileIconGlyph
 }
@@ -206,9 +207,9 @@ const GLYPHS: Record<string, (p: P) => JSX.Element> = {
  * Pass `ext` when you already have it (cheaper than re-parsing a full path).
  */
 export function FileKindIcon({ ext, path, isDirectory, ...rest }: P & { ext?: string; path?: string; isDirectory?: boolean }) {
-  const info = ext ? getFileKindByExt(ext) : path ? getFileKindByExt(path.split('.').pop() ?? '') : null
-  const kind = isDirectory ? 'folder' : info?.kind ?? 'file'
+  const info = ext ? getFileKindByExt(ext, isDirectory) : path ? getFileKindByExt(path.split('.').pop() ?? '', isDirectory) : null
+  const kind = info?.kind ?? 'file'
   const Glyph = GLYPHS[kind] ?? FileIconGlyph
-  const color = isDirectory ? '#64B5F6' : info?.color ?? 'currentColor'
+  const color = info?.color ?? 'currentColor'
   return <Glyph {...rest} style={{ color, ...(rest.style ?? {}) }} />
 }

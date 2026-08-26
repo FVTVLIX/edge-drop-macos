@@ -1,11 +1,15 @@
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
+#[cfg(target_os = "macos")]
+use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 mod clipboard;
 mod clipboard_write;
 mod cursor;
 mod drag;
+mod paste;
 mod settings;
 mod store;
 mod tray;
@@ -18,6 +22,10 @@ pub struct AppState {
     pub clipboard_watcher: tokio::sync::Mutex<clipboard::ClipboardWatcher>,
     pub settings: tokio::sync::RwLock<settings::AppSettings>,
     pub interactive: tokio::sync::Mutex<bool>,
+    pub manual_open: tokio::sync::Mutex<bool>,
+    pub preview_open: tokio::sync::Mutex<bool>,
+    pub last_paste_at: tokio::sync::Mutex<Option<std::time::Instant>>,
+    pub suppress_edge_until: tokio::sync::Mutex<Option<std::time::Instant>>,
     pub quitting: tokio::sync::Mutex<bool>,
 }
 
@@ -26,6 +34,11 @@ impl AppState {
         let settings = settings::AppSettings::load();
         let mut item_store = ItemStore::new();
         item_store.set_history_limit(settings.history_limit);
+        if settings.clear_unpinned_on_restart {
+            item_store.clear_unpinned();
+        } else {
+            item_store.prune_expired(settings.auto_delete_hours);
+        }
         let mut clipboard_watcher = clipboard::ClipboardWatcher::new(100);
         clipboard_watcher.set_paused(settings.incognito);
         Self {
@@ -33,8 +46,33 @@ impl AppState {
             clipboard_watcher: tokio::sync::Mutex::new(clipboard_watcher),
             settings: tokio::sync::RwLock::new(settings),
             interactive: tokio::sync::Mutex::new(false),
+            manual_open: tokio::sync::Mutex::new(false),
+            preview_open: tokio::sync::Mutex::new(false),
+            last_paste_at: tokio::sync::Mutex::new(None),
+            suppress_edge_until: tokio::sync::Mutex::new(None),
             quitting: tokio::sync::Mutex::new(false),
         }
+    }
+}
+
+pub async fn toggle_manual_panel(app: tauri::AppHandle) {
+    let state = app.state::<Arc<AppState>>();
+    let open = !*state.interactive.lock().await;
+    *state.manual_open.lock().await = open;
+    if !open {
+        *state.suppress_edge_until.lock().await =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(700));
+    }
+    *state.interactive.lock().await = open;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        // Opening does not make the entire transparent host interactive.
+        // The cursor poll enables input only over the visible shelf/flyout.
+        // Closing can safely force the whole host back to click-through.
+        if !open {
+            let _ = crate::window::set_interactive(&window, false);
+        }
+        let _ = window.emit("panel-toggle", open);
     }
 }
 
@@ -75,11 +113,30 @@ async fn get_settings(
 
 #[tauri::command]
 async fn update_settings(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     settings: settings::AppSettings,
 ) -> Result<settings::AppSettings, String> {
     let settings = settings.sanitized();
     let previous = state.settings.read().await.clone();
+    if previous.toggle_hotkey != settings.toggle_hotkey {
+        app.global_shortcut()
+            .register(settings.toggle_hotkey.as_str())
+            .map_err(|error| format!("could not register shortcut: {error}"))?;
+        let _ = app
+            .global_shortcut()
+            .unregister(previous.toggle_hotkey.as_str());
+    }
+    #[cfg(target_os = "macos")]
+    if previous.launch_at_login != settings.launch_at_login {
+        let autostart = app.autolaunch();
+        if settings.launch_at_login {
+            autostart.enable()
+        } else {
+            autostart.disable()
+        }
+        .map_err(|error| format!("could not update launch-at-login: {error}"))?;
+    }
     settings.persist()?;
     state
         .clipboard_watcher
@@ -97,15 +154,77 @@ async fn update_settings(
             );
         }
     }
+    if previous.auto_delete_hours != settings.auto_delete_hours && settings.auto_delete_hours > 0 {
+        let mut store = state.item_store.lock().await;
+        if store.prune_expired(settings.auto_delete_hours) > 0 {
+            let items = store.list().to_vec();
+            if let Some(window) = store.get_window() {
+                let _ = window.emit(
+                    "clipboard-update",
+                    crate::clipboard::ClipboardUpdate { items },
+                );
+            }
+        }
+    }
     *state.settings.write().await = settings.clone();
+    if previous.edge_position != settings.edge_position {
+        if let (Some(window), Ok(Some(monitor))) =
+            (app.get_webview_window("main"), app.primary_monitor())
+        {
+            crate::window::position_window(&window, &monitor, &settings.edge_position)
+                .map_err(|error| error.to_string())?;
+        }
+    }
     Ok(settings)
+}
+
+#[tauri::command]
+async fn set_hotkey_paused(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    paused: bool,
+) -> Result<(), String> {
+    let shortcut = state.settings.read().await.toggle_hotkey.clone();
+    if paused {
+        let _ = app.global_shortcut().unregister(shortcut.as_str());
+        Ok(())
+    } else if app.global_shortcut().is_registered(shortcut.as_str()) {
+        Ok(())
+    } else {
+        app.global_shortcut()
+            .register(shortcut.as_str())
+            .map_err(|error| format!("could not restore shortcut: {error}"))
+    }
+}
+
+#[tauri::command]
+async fn set_preview_open(
+    state: tauri::State<'_, Arc<AppState>>,
+    open: bool,
+) -> Result<(), String> {
+    *state.preview_open.lock().await = open;
+    Ok(())
 }
 
 #[tauri::command]
 async fn delete_item(state: tauri::State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
     let mut store = state.item_store.lock().await;
     store.delete(&id);
+    state.clipboard_watcher.lock().await.baseline_pending = true;
     Ok(())
+}
+
+#[tauri::command]
+async fn delete_items(
+    state: tauri::State<'_, Arc<AppState>>,
+    ids: Vec<String>,
+) -> Result<Vec<store::ClipboardItem>, String> {
+    let mut store = state.item_store.lock().await;
+    store.delete_batch(&ids);
+    let items = store.list().to_vec();
+    drop(store);
+    state.clipboard_watcher.lock().await.baseline_pending = true;
+    Ok(items)
 }
 
 #[tauri::command]
@@ -122,15 +241,9 @@ async fn toggle_pin(
 #[tauri::command]
 async fn clear_items(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     let mut store = state.item_store.lock().await;
-    let ids: Vec<String> = store
-        .list()
-        .iter()
-        .filter(|i| !i.pinned)
-        .map(|i| i.id.clone())
-        .collect();
-    for id in ids {
-        store.delete(&id);
-    }
+    store.clear_unpinned();
+    drop(store);
+    state.clipboard_watcher.lock().await.baseline_pending = true;
     Ok(())
 }
 
@@ -153,6 +266,104 @@ async fn copy_item(
     let result = clipboard_write::write_item(&item, &request);
     state.clipboard_watcher.lock().await.finish_self_write();
     result
+}
+
+/// Copy an item or stack member to the pasteboard, return focus to the
+/// previously active app, and synthesize Command+V. Mirrors the upstream
+/// click-to-paste flow while using macOS Accessibility instead of SendKeys.
+#[tauri::command]
+async fn paste_item(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<AppState>>,
+    request: drag::DragRequest,
+) -> Result<(), String> {
+    const PASTE_GUARD_MS: u128 = 600;
+    {
+        let mut last_paste_at = state.last_paste_at.lock().await;
+        let now = std::time::Instant::now();
+        if last_paste_at
+            .is_some_and(|previous| now.duration_since(previous).as_millis() < PASTE_GUARD_MS)
+        {
+            return Ok(());
+        }
+        paste::ensure_post_event_access()?;
+        *last_paste_at = Some(now);
+    }
+
+    let item = {
+        let store = state.item_store.lock().await;
+        store
+            .list()
+            .iter()
+            .find(|item| item.id == request.id)
+            .cloned()
+            .ok_or_else(|| "item not found".to_string())?
+    };
+
+    state.clipboard_watcher.lock().await.begin_self_write();
+    let write_result = clipboard_write::write_item(&item, &request);
+    state.clipboard_watcher.lock().await.finish_self_write();
+    write_result?;
+
+    *state.suppress_edge_until.lock().await =
+        Some(std::time::Instant::now() + std::time::Duration::from_millis(700));
+    *state.preview_open.lock().await = false;
+    *state.manual_open.lock().await = false;
+    *state.interactive.lock().await = false;
+    window::set_interactive(&window, false).map_err(|error| error.to_string())?;
+    let _ = window.emit("panel-toggle", false);
+
+    paste::set_application_hidden(&window, true).await?;
+    tokio::time::sleep(tokio::time::Duration::from_millis(90)).await;
+    let paste_result = paste::post_paste_shortcut();
+    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+    paste::set_application_hidden(&window, false).await?;
+    paste_result?;
+
+    let move_pasted_to_top = state.settings.read().await.move_pasted_to_top;
+    if move_pasted_to_top {
+        let mut store = state.item_store.lock().await;
+        if store.touch(&request.id) {
+            let items = store.list().to_vec();
+            if let Some(store_window) = store.get_window() {
+                let _ = store_window.emit(
+                    "clipboard-update",
+                    crate::clipboard::ClipboardUpdate { items },
+                );
+            }
+        }
+    }
+    state
+        .clipboard_watcher
+        .lock()
+        .await
+        .invalidate_after_paste();
+    Ok(())
+}
+
+#[tauri::command]
+fn open_accessibility_settings() -> Result<(), String> {
+    paste::open_accessibility_settings()
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle, state: tauri::State<'_, Arc<AppState>>) {
+    *state.quitting.blocking_lock() = true;
+    app.exit(0);
+}
+
+#[tauri::command]
+fn reveal_file(path: String) -> Result<(), String> {
+    let target = std::path::Path::new(&path);
+    if !target.exists() {
+        return Err("The item no longer exists on disk.".to_string());
+    }
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(target)
+        .spawn()
+        .map_err(|error| format!("could not reveal item in Finder: {error}"))?;
+    Ok(())
 }
 
 /// Load an image preview from disk and return as base64 data URL.
@@ -342,6 +553,23 @@ async fn split_item(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        crate::toggle_manual_panel(app).await;
+                    });
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(Arc::new(AppState::new()))
@@ -349,11 +577,18 @@ pub fn run() {
             get_items,
             get_settings,
             update_settings,
+            set_hotkey_paused,
+            set_preview_open,
             start_drag,
             delete_item,
+            delete_items,
             toggle_pin,
             clear_items,
             copy_item,
+            paste_item,
+            open_accessibility_settings,
+            quit_app,
+            reveal_file,
             get_image_preview,
             merge_items,
             split_item,
@@ -365,6 +600,30 @@ pub fn run() {
 
             // Create and configure the transparent edge window
             window::setup_window(app)?;
+
+            let shortcut = {
+                let state: tauri::State<'_, Arc<AppState>> = app.state();
+                let shortcut = state.settings.blocking_read().toggle_hotkey.clone();
+                shortcut
+            };
+            if let Err(error) = app.global_shortcut().register(shortcut.as_str()) {
+                eprintln!("Global shortcut unavailable ({shortcut}): {error}");
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                let state: tauri::State<'_, Arc<AppState>> = app.state();
+                let launch_at_login = state.settings.blocking_read().launch_at_login;
+                let autostart = app.autolaunch();
+                let result = if launch_at_login {
+                    autostart.enable()
+                } else {
+                    autostart.disable()
+                };
+                if let Err(error) = result {
+                    eprintln!("Launch-at-login unavailable: {error}");
+                }
+            }
 
             // Wire up the item store
             {
@@ -395,6 +654,31 @@ pub fn run() {
                 let arc = state.inner().clone();
                 tauri::async_runtime::spawn(async move {
                     clipboard::watch_clipboard(arc).await;
+                });
+            }
+
+            // Keep the upstream automatic-retention behavior without tying it
+            // to clipboard activity. Pinned items are never expired.
+            {
+                let state: tauri::State<'_, Arc<AppState>> = app.state();
+                let arc = state.inner().clone();
+                let prune_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(15 * 60)).await;
+                        if *arc.quitting.lock().await {
+                            break;
+                        }
+                        let hours = arc.settings.read().await.auto_delete_hours;
+                        let mut store = arc.item_store.lock().await;
+                        if store.prune_expired(hours) > 0 {
+                            let items = store.list().to_vec();
+                            let _ = prune_handle.emit(
+                                "clipboard-update",
+                                crate::clipboard::ClipboardUpdate { items },
+                            );
+                        }
+                    }
                 });
             }
 

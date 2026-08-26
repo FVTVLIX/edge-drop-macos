@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { HotkeyRecorder } from "./HotkeyRecorder";
 import { SettingsData } from "../settings";
 
 interface SettingsProps {
@@ -122,6 +123,19 @@ export function Settings({ settings, onUpdate, onClose, onReset }: SettingsProps
 
       <div className="settings-scroll">
         <SettingsSection eyebrow="Activation" title="Edge trigger">
+          <ToggleControl
+            label="Hover activation"
+            description="Open the shelf when the pointer reaches its trigger area. The shortcut always works."
+            value={settings.hoverActivation}
+            onChange={(hoverActivation) => onUpdate({ hoverActivation })}
+          />
+          <div className="settings-control settings-segment-control">
+            <span className="settings-control-copy">
+              <strong>Global toggle shortcut</strong>
+              <small>Open or close the shelf from any application.</small>
+            </span>
+            <HotkeyRecorder value={settings.toggleHotkey} onChange={(toggleHotkey) => onUpdate({ toggleHotkey })} />
+          </div>
           <SliderControl
             label="Trigger height"
             description="Vertical portion of the screen edge that opens the shelf."
@@ -134,7 +148,7 @@ export function Settings({ settings, onUpdate, onClose, onReset }: SettingsProps
           />
           <SliderControl
             label="Edge thickness"
-            description="How close the pointer must be to the left edge."
+            description={`How close the pointer must be to the ${settings.edgePosition} edge.`}
             value={settings.hotZoneWidth}
             min={1}
             max={16}
@@ -165,6 +179,23 @@ export function Settings({ settings, onUpdate, onClose, onReset }: SettingsProps
         </SettingsSection>
 
         <SettingsSection eyebrow="Layout" title="Shelf appearance">
+          <div className="settings-control settings-segment-control">
+            <span className="settings-control-copy">
+              <strong>Screen edge</strong>
+              <small>Choose which side holds the shelf and preview.</small>
+            </span>
+            <div className="settings-segmented">
+              {(["left", "right"] as const).map((edgePosition) => (
+                <button
+                  key={edgePosition}
+                  className={settings.edgePosition === edgePosition ? "selected" : ""}
+                  onClick={() => onUpdate({ edgePosition })}
+                >
+                  {edgePosition === "left" ? "Left" : "Right"}
+                </button>
+              ))}
+            </div>
+          </div>
           <SliderControl
             label="Panel height"
             description="Visible height of the shelf when it is open."
@@ -175,6 +206,33 @@ export function Settings({ settings, onUpdate, onClose, onReset }: SettingsProps
             displayValue={`${Math.round(settings.panelHeight * 100)}%`}
             onChange={(value) => onUpdate({ panelHeight: value / 100 })}
           />
+          <SliderControl
+            label="Vertical position"
+            description="Move the shelf from the top to the bottom of the selected edge."
+            value={Math.round(settings.verticalOffset * 100)}
+            min={0}
+            max={100}
+            step={5}
+            displayValue={`${Math.round(settings.verticalOffset * 100)}%`}
+            onChange={(value) => onUpdate({ verticalOffset: value / 100 })}
+          />
+          <div className="settings-control settings-segment-control">
+            <span className="settings-control-copy">
+              <strong>Trigger alignment</strong>
+              <small>Align the hover strip within the shelf.</small>
+            </span>
+            <div className="settings-segmented">
+              {(["top", "center", "bottom"] as const).map((triggerAlignment) => (
+                <button
+                  key={triggerAlignment}
+                  className={settings.triggerAlignment === triggerAlignment ? "selected" : ""}
+                  onClick={() => onUpdate({ triggerAlignment })}
+                >
+                  {triggerAlignment[0].toUpperCase() + triggerAlignment.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="settings-control settings-segment-control">
             <span className="settings-control-copy">
               <strong>Card density</strong>
@@ -188,6 +246,23 @@ export function Settings({ settings, onUpdate, onClose, onReset }: SettingsProps
                   onClick={() => onUpdate({ uiStyle: style })}
                 >
                   {style === "modern" ? "Comfortable" : "Compact"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="settings-control settings-segment-control">
+            <span className="settings-control-copy">
+              <strong>Text size</strong>
+              <small>Adjust shelf labels and controls for readability.</small>
+            </span>
+            <div className="settings-segmented">
+              {([0.85, 1, 1.15] as const).map((fontSizeScale) => (
+                <button
+                  key={fontSizeScale}
+                  className={settings.fontSizeScale === fontSizeScale ? "selected" : ""}
+                  onClick={() => onUpdate({ fontSizeScale })}
+                >
+                  {fontSizeScale === 0.85 ? "Small" : fontSizeScale === 1 ? "Normal" : "Large"}
                 </button>
               ))}
             </div>
@@ -214,6 +289,12 @@ export function Settings({ settings, onUpdate, onClose, onReset }: SettingsProps
         </SettingsSection>
 
         <SettingsSection eyebrow="Storage" title="Clipboard history">
+          <ToggleControl
+            label="Move pasted items to top"
+            description="Promote an item to the top of Recent after click-to-paste."
+            value={settings.movePastedToTop}
+            onChange={(movePastedToTop) => onUpdate({ movePastedToTop })}
+          />
           <SliderControl
             label="History limit"
             description="Pinned cards are always preserved when older items are trimmed."
@@ -223,6 +304,35 @@ export function Settings({ settings, onUpdate, onClose, onReset }: SettingsProps
             step={50}
             displayValue={`${settings.historyLimit} items`}
             onChange={(historyLimit) => onUpdate({ historyLimit })}
+          />
+          <div className="settings-control settings-segment-control">
+            <span className="settings-control-copy">
+              <strong>Automatically delete</strong>
+              <small>Expire unpinned history after this amount of time.</small>
+            </span>
+            <div className="settings-segmented">
+              {([
+                { value: 0, label: "Never" },
+                { value: 1, label: "1h" },
+                { value: 6, label: "6h" },
+                { value: 24, label: "24h" },
+                { value: 168, label: "7d" },
+              ] as const).map((option) => (
+                <button
+                  key={option.value}
+                  className={settings.autoDeleteHours === option.value ? "selected" : ""}
+                  onClick={() => onUpdate({ autoDeleteHours: option.value })}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <ToggleControl
+            label="Clear unpinned on restart"
+            description="Start each session with only pinned items."
+            value={settings.clearUnpinnedOnRestart}
+            onChange={(clearUnpinnedOnRestart) => onUpdate({ clearUnpinnedOnRestart })}
           />
           <ToggleControl
             label="Pause clipboard capture"
@@ -239,6 +349,33 @@ export function Settings({ settings, onUpdate, onClose, onReset }: SettingsProps
             value={settings.reduceMotion}
             onChange={(reduceMotion) => onUpdate({ reduceMotion })}
           />
+          <ToggleControl
+            label="Bounce animation"
+            description="Add the original overshoot motion when the shelf opens."
+            value={settings.bounceAnimation}
+            onChange={(bounceAnimation) => onUpdate({ bounceAnimation })}
+          />
+        </SettingsSection>
+
+        <SettingsSection eyebrow="Application" title="Edge Drop">
+          <ToggleControl
+            label="Launch at login"
+            description="Start Edge Drop automatically when you sign in to this Mac."
+            value={settings.launchAtLogin}
+            onChange={(launchAtLogin) => onUpdate({ launchAtLogin })}
+          />
+          <div className="settings-control settings-segment-control">
+            <span className="settings-control-copy">
+              <strong>Quit Edge Drop</strong>
+              <small>Stop clipboard capture and close the menu bar app.</small>
+            </span>
+            <button
+              className="settings-reset"
+              onClick={() => import("@tauri-apps/api/core").then(({ invoke }) => invoke("quit_app"))}
+            >
+              Quit
+            </button>
+          </div>
         </SettingsSection>
       </div>
 

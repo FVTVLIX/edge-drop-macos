@@ -100,11 +100,16 @@ pub fn file_entries(paths: &[String]) -> Vec<FileEntry> {
                         | "tif"
                         | "heic"
                         | "heif"
+                        | "svg"
                 );
             let preview = if is_image && size < 500_000 {
                 fs::read(path).ok().map(|bytes| {
                     use base64::Engine as _;
-                    let mime_ext = if ext == "jpg" { "jpeg" } else { ext.as_str() };
+                    let mime_ext = match ext.as_str() {
+                        "jpg" => "jpeg",
+                        "svg" => "svg+xml",
+                        value => value,
+                    };
                     format!(
                         "data:image/{mime_ext};base64,{}",
                         base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -146,6 +151,12 @@ pub struct ItemStore {
     data_dir: PathBuf,
     window: Option<WebviewWindow>,
     history_limit: usize,
+}
+
+impl Default for ItemStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ItemStore {
@@ -399,12 +410,101 @@ impl ItemStore {
         if let Some(idx) = self.items.iter().position(|i| i.id == id) {
             let removed = self.items.remove(idx);
             self.sig_to_id.remove(&Self::signature(&removed.data));
+            self.remove_unreferenced_images(std::slice::from_ref(&removed));
             self.persist();
         }
     }
 
+    /// Delete several history items in one pass and persist once. This keeps
+    /// large selective clears responsive and avoids transient intermediate
+    /// lists being rendered by the frontend.
+    pub fn delete_batch(&mut self, ids: &[String]) -> usize {
+        let ids: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
+        let previous_len = self.items.len();
+        let mut removed_items = Vec::new();
+        self.items.retain(|item| {
+            if ids.contains(item.id.as_str()) {
+                removed_items.push(item.clone());
+                false
+            } else {
+                true
+            }
+        });
+        let removed = previous_len - self.items.len();
+        if removed > 0 {
+            self.remove_unreferenced_images(&removed_items);
+            self.rebuild_index();
+            self.persist();
+        }
+        removed
+    }
+
+    fn remove_unreferenced_images(&self, removed: &[ClipboardItem]) {
+        let referenced: std::collections::HashSet<&str> = self
+            .items
+            .iter()
+            .flat_map(|item| image_ids(&item.data))
+            .collect();
+        for image_id in removed
+            .iter()
+            .flat_map(|item| image_ids(&item.data))
+            .filter(|image_id| !referenced.contains(image_id))
+        {
+            let _ = fs::remove_file(self.data_dir.join("images").join(format!("{image_id}.png")));
+        }
+    }
+
+    /// Promote a pasted, unpinned item to the top of Recent without changing
+    /// its copy count. Pinned items retain their stable position.
+    pub fn touch(&mut self, id: &str) -> bool {
+        let Some(index) = self
+            .items
+            .iter()
+            .position(|item| item.id == id && !item.pinned)
+        else {
+            return false;
+        };
+        if index == 0 {
+            return false;
+        }
+        let mut item = self.items.remove(index);
+        item.captured_at = chrono::Utc::now().timestamp_millis();
+        self.items.insert(0, item);
+        self.persist();
+        true
+    }
+
     pub fn list(&self) -> &[ClipboardItem] {
         &self.items
+    }
+
+    /// Remove every unpinned item. Used by the restart-retention setting and
+    /// the menu/UI clear actions so all paths share the same cleanup behavior.
+    pub fn clear_unpinned(&mut self) -> usize {
+        let ids = self
+            .items
+            .iter()
+            .filter(|item| !item.pinned)
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>();
+        self.delete_batch(&ids)
+    }
+
+    /// Remove unpinned items older than the configured retention window.
+    /// A value of zero disables automatic expiry.
+    pub fn prune_expired(&mut self, hours: u64) -> usize {
+        if hours == 0 {
+            return 0;
+        }
+        let cutoff = chrono::Utc::now().timestamp_millis()
+            - i64::try_from(hours.saturating_mul(60 * 60 * 1_000)).unwrap_or(i64::MAX);
+        let ids = self
+            .items
+            .iter()
+            .filter(|item| !item.pinned && item.captured_at < cutoff)
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>();
+        self.delete_batch(&ids)
     }
 
     fn trim(&mut self, limit: usize) {
@@ -634,6 +734,16 @@ fn stable_stored_image_id(image_dir: &std::path::Path, image_id: &str) -> String
     stable_id
 }
 
+fn image_ids(data: &ItemData) -> Vec<&str> {
+    match data {
+        ItemData::Image { image_id, .. } => vec![image_id.as_str()],
+        ItemData::ImageCollection { images } => {
+            images.iter().map(|image| image.image_id.as_str()).collect()
+        }
+        ItemData::Text { .. } | ItemData::Files { .. } => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -682,6 +792,72 @@ mod tests {
             .items
             .iter()
             .all(|item| matches!(item.data, ItemData::Image { .. })));
+        let _ = fs::remove_dir_all(&store.data_dir);
+    }
+
+    #[test]
+    fn batch_delete_is_atomic_and_touch_promotes_recent_items() {
+        let mut store = test_store();
+        store.add(ItemData::Text {
+            text: "first".to_string(),
+            html: None,
+            is_url: false,
+            is_color: false,
+        });
+        let first_id = store.items[0].id.clone();
+        store.add(ItemData::Text {
+            text: "second".to_string(),
+            html: None,
+            is_url: false,
+            is_color: false,
+        });
+        let second_id = store.items[0].id.clone();
+        store.add(ItemData::Text {
+            text: "third".to_string(),
+            html: None,
+            is_url: false,
+            is_color: false,
+        });
+
+        assert!(store.touch(&first_id));
+        assert_eq!(store.items[0].id, first_id);
+        assert_eq!(store.delete_batch(std::slice::from_ref(&second_id)), 1);
+        assert!(store.items.iter().all(|item| item.id != second_id));
+        let _ = fs::remove_dir_all(&store.data_dir);
+    }
+
+    #[test]
+    fn retention_pruning_preserves_pinned_and_recent_items() {
+        let mut store = test_store();
+        let old = chrono::Utc::now().timestamp_millis() - (8 * 60 * 60 * 1_000);
+        let recent = chrono::Utc::now().timestamp_millis();
+        let make_item = |id: &str, captured_at: i64, pinned: bool| ClipboardItem {
+            id: id.to_string(),
+            data: ItemData::Text {
+                text: id.to_string(),
+                html: None,
+                is_url: false,
+                is_color: false,
+            },
+            captured_at,
+            hit_count: 1,
+            pinned,
+            entries: None,
+        };
+        store.items = vec![
+            make_item("recent", recent, false),
+            make_item("old-pinned", old, true),
+            make_item("old", old, false),
+        ];
+        store.rebuild_index();
+
+        assert_eq!(store.prune_expired(6), 1);
+        assert_eq!(store.items.len(), 2);
+        assert!(store.items.iter().any(|item| item.id == "recent"));
+        assert!(store.items.iter().any(|item| item.id == "old-pinned"));
+        assert_eq!(store.clear_unpinned(), 1);
+        assert_eq!(store.items.len(), 1);
+        assert!(store.items[0].pinned);
         let _ = fs::remove_dir_all(&store.data_dir);
     }
 

@@ -32,7 +32,7 @@ fn resolve_drag_paths(item: &ClipboardItem, request: &DragRequest) -> Result<Vec
         ItemData::Text { text, .. } => {
             let temp_dir = get_temp_dir();
             fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-            let path = temp_dir.join(format!("Edge-Drop Text {}.txt", item.id));
+            let path = temp_dir.join(format!("Edge Drop Text {}.txt", item.id));
             fs::write(&path, text).map_err(|e| e.to_string())?;
             vec![path]
         }

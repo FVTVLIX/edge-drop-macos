@@ -1,7 +1,7 @@
 use crate::AppState;
 use std::sync::Arc;
-use tauri::App;
 use tauri::Manager;
+use tauri::{App, Emitter};
 
 /// Set up the macOS menu bar status item.
 #[cfg(target_os = "macos")]
@@ -19,8 +19,11 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
         .separator()
         .item(&quit_item)
         .build()?;
+    let tray_icon = tauri::include_image!("../public/tray-icon.png");
 
     let _tray = TrayIconBuilder::new()
+        .icon(tray_icon)
+        .icon_as_template(true)
         .menu(&menu)
         .tooltip("Edge Drop")
         .on_menu_event(|app_handle, event| match event.id().as_ref() {
@@ -30,23 +33,24 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
                 app_handle.exit(0);
             }
             "toggle" => {
-                if let Some(window) = app_handle.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_always_on_top(true);
-                }
+                let app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::toggle_manual_panel(app_handle).await;
+                });
             }
             "clear" => {
                 let state = app_handle.state::<Arc<AppState>>();
                 let mut store = state.item_store.blocking_lock();
-                let ids: Vec<String> = store
-                    .list()
-                    .iter()
-                    .filter(|i| !i.pinned)
-                    .map(|i| i.id.clone())
-                    .collect();
-                for id in ids {
-                    store.delete(&id);
+                store.clear_unpinned();
+                let items = store.list().to_vec();
+                if let Some(window) = store.get_window() {
+                    let _ = window.emit(
+                        "clipboard-update",
+                        crate::clipboard::ClipboardUpdate { items },
+                    );
                 }
+                drop(store);
+                state.clipboard_watcher.blocking_lock().baseline_pending = true;
             }
             _ => {}
         })
@@ -57,16 +61,10 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
                 ..
             } = event
             {
-                if let Some(window) = tray.app_handle().get_webview_window("main") {
-                    let state = tray.app_handle().state::<Arc<AppState>>();
-                    let interactive = state.interactive.blocking_lock();
-                    if *interactive {
-                        let _ = window.hide();
-                    } else {
-                        let _ = window.show();
-                        let _ = window.set_always_on_top(true);
-                    }
-                }
+                let app_handle = tray.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::toggle_manual_panel(app_handle).await;
+                });
             }
         })
         .build(app)?;

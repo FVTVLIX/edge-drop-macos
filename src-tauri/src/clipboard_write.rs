@@ -94,8 +94,12 @@ fn image_path(image_id: &str) -> PathBuf {
 }
 
 fn write_text(text: String, html: Option<String>) -> Result<(), String> {
+    let text = normalize_clipboard_text(&text);
+    let html = html
+        .filter(|html| !html.trim().is_empty())
+        .or_else(|| text.contains('\t').then(|| tsv_to_html_table(&text)));
     let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
-    if let Some(html) = html.filter(|html| !html.trim().is_empty()) {
+    if let Some(html) = html {
         clipboard
             .set()
             .html(html, Some(text))
@@ -103,6 +107,36 @@ fn write_text(text: String, html: Option<String>) -> Result<(), String> {
     } else {
         clipboard.set_text(text).map_err(|error| error.to_string())
     }
+}
+
+fn normalize_clipboard_text(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', "\r\n")
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn tsv_to_html_table(text: &str) -> String {
+    let rows = text
+        .replace("\r\n", "\n")
+        .split('\n')
+        .map(|row| {
+            let cells = row
+                .split('\t')
+                .map(|cell| format!("<td>{}</td>", escape_html(cell)))
+                .collect::<String>();
+            format!("<tr>{cells}</tr>")
+        })
+        .collect::<String>();
+    format!("<table>{rows}</table>")
 }
 
 fn write_files(paths: &[PathBuf]) -> Result<(), String> {
@@ -159,13 +193,11 @@ fn write_images_to_pasteboard(
 
     pasteboard.clearContents();
     let objects = NSArray::from_retained_slice(&objects);
-    let result = if pasteboard.writeObjects(&objects) {
+    if pasteboard.writeObjects(&objects) {
         Ok(())
     } else {
         Err("macOS could not write the images to the clipboard".to_string())
-    };
-
-    result
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -251,6 +283,16 @@ mod tests {
         assert!(resolve_payload(&item, &request)
             .unwrap_err()
             .contains("not part of this stack"));
+    }
+
+    #[test]
+    fn spreadsheet_text_gets_crlf_and_html_cells() {
+        let text = "Name\tValue\nA&B\t<2>";
+        assert_eq!(normalize_clipboard_text(text), "Name\tValue\r\nA&B\t<2>");
+        assert_eq!(
+            tsv_to_html_table(text),
+            "<table><tr><td>Name</td><td>Value</td></tr><tr><td>A&amp;B</td><td>&lt;2&gt;</td></tr></table>"
+        );
     }
 
     #[cfg(target_os = "macos")]

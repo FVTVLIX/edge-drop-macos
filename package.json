@@ -1,5 +1,5 @@
 {
-  "name": "mac-edge-drop",
+  "name": "edge-drop",
   "version": "0.1.0",
   "description": "Edge Drop for macOS — a clipboard shelf that lives on the edge of your screen",
   "author": "Andres Gonzalez",

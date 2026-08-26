@@ -12,14 +12,23 @@ This port is under active development. It is not currently an official release o
 - Plain text, URL, rich HTML, image, file, and folder capture
 - Native drag-in and drag-out without manual copy commands
 - Native macOS clipboard writes for text, images, files, and folders
+- Click-to-paste back into the previously active app (with macOS Accessibility permission)
+- Spreadsheet-safe TSV and rich HTML clipboard output
 - Image and file stacks with a maximum of 10 members
 - Stack grouping, merging, expansion, individual member drag/copy, and ungrouping
-- Image previews and Finder-aware file/folder labels
-- Pinning, search, guarded deletion, and clear-unpinned behavior
+- Rich image, file, text, and offline URL preview flyouts
+- Image and SVG previews plus Finder-aware file/folder labels
+- Pinning, filename-aware search, category filters, and filter-scoped history clearing
+- Time-based clearing for the last 1, 6, or 24 hours with atomic batch deletion
+- Automatic 1-hour, 6-hour, 24-hour, or 7-day retention and optional clear-on-restart
 - Clipboard deduplication and self-copy suppression
+- Re-copy promotion and optional move-pasted-items-to-top behavior
 - Sensitive clipboard-format filtering and incognito mode
 - Configurable edge position, trigger area, panel sizing, history limit, appearance, and drag-preview size
-- macOS menu bar integration
+- Configurable vertical shelf position, trigger alignment, shortcut-only activation, and open animation
+- Configurable global shelf shortcut and macOS menu bar integration
+- Native launch-at-login, Show in Finder actions, and an in-app quit control
+- Adaptive cursor polling to reduce idle CPU wakeups
 
 ## Technology
 
@@ -54,6 +63,7 @@ Move the pointer to the configured screen edge or use the menu bar item to revea
 ```bash
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
 ### Build the macOS application
