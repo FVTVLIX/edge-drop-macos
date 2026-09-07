@@ -22,6 +22,10 @@ const BRANDS: Record<string, [string, string]> = {
   "drive.google.com": ["Google Drive", "#0f9d58"],
 };
 
+function safeDecode(value: string): string {
+  try { return decodeURIComponent(value); } catch { return value; }
+}
+
 export function parseUrlPreview(rawUrl: string): UrlPreviewInfo {
   try {
     const parsed = new URL(/^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`);
@@ -39,11 +43,11 @@ export function parseUrlPreview(rawUrl: string): UrlPreviewInfo {
         title += ` · ${parts[2] === "pull" ? "PR" : "Issue"} #${parts[3]}`;
       }
     } else if (domain.endsWith("wikipedia.org") && parts[0] === "wiki" && parts[1]) {
-      title = decodeURIComponent(parts[1]).replace(/_/g, " ");
+      title = safeDecode(parts[1]).replace(/_/g, " ");
     } else if (domain.endsWith("reddit.com") && parts[0] === "r" && parts[1]) {
       title = `r/${parts[1]}`;
     } else if (parts.length > 0) {
-      const candidate = decodeURIComponent(parts[parts.length - 1] || "")
+      const candidate = safeDecode(parts[parts.length - 1] || "")
         .replace(/[-_]/g, " ")
         .replace(/\.(html?|php|aspx?)$/i, "");
       if (candidate.length > 3 && !/^[0-9a-f]{8,}$/i.test(candidate)) title = candidate;

@@ -440,17 +440,40 @@ impl ItemStore {
     }
 
     fn remove_unreferenced_images(&self, removed: &[ClipboardItem]) {
-        let referenced: std::collections::HashSet<&str> = self
+        let referenced: std::collections::HashSet<String> = self
             .items
             .iter()
-            .flat_map(|item| image_ids(&item.data))
+            .flat_map(|item| self.stored_image_ids(&item.data))
             .collect();
         for image_id in removed
             .iter()
-            .flat_map(|item| image_ids(&item.data))
+            .flat_map(|item| self.stored_image_ids(&item.data))
             .filter(|image_id| !referenced.contains(image_id))
         {
             let _ = fs::remove_file(self.data_dir.join("images").join(format!("{image_id}.png")));
+        }
+    }
+
+    fn stored_image_ids(&self, data: &ItemData) -> Vec<String> {
+        match data {
+            ItemData::Image { image_id, .. } => vec![image_id.clone()],
+            ItemData::ImageCollection { images } => {
+                images.iter().map(|image| image.image_id.clone()).collect()
+            }
+            ItemData::Files { paths } => {
+                let image_dir = self.data_dir.join("images");
+                paths
+                    .iter()
+                    .filter_map(|path| {
+                        let path = std::path::Path::new(path);
+                        (path.parent() == Some(image_dir.as_path())
+                            && path.extension().and_then(|ext| ext.to_str()) == Some("png"))
+                        .then(|| path.file_stem()?.to_str().map(str::to_string))
+                        .flatten()
+                    })
+                    .collect()
+            }
+            ItemData::Text { .. } => Vec::new(),
         }
     }
 
@@ -474,8 +497,75 @@ impl ItemStore {
         true
     }
 
+    /// Record an explicit copy or successful whole-item drag-out. Unlike paste
+    /// promotion, usage increments the badge as well as recency.
+    pub fn record_use(&mut self, id: &str) -> bool {
+        let Some(index) = self.items.iter().position(|item| item.id == id) else {
+            return false;
+        };
+        let mut item = self.items.remove(index);
+        item.hit_count = item.hit_count.saturating_add(1);
+        item.captured_at = chrono::Utc::now().timestamp_millis();
+        if item.pinned {
+            self.items.insert(index, item);
+        } else {
+            self.items.insert(0, item);
+        }
+        self.persist();
+        true
+    }
+
     pub fn list(&self) -> &[ClipboardItem] {
         &self.items
+    }
+
+    fn stack_paths(&self, data: &ItemData) -> Vec<String> {
+        match data {
+            ItemData::Files { paths } => paths.clone(),
+            ItemData::Image { image_id, .. } => vec![self
+                .data_dir
+                .join("images")
+                .join(format!("{image_id}.png"))
+                .to_string_lossy()
+                .to_string()],
+            ItemData::ImageCollection { images } => images
+                .iter()
+                .map(|image| {
+                    self.data_dir
+                        .join("images")
+                        .join(format!("{}.png", image.image_id))
+                        .to_string_lossy()
+                        .to_string()
+                })
+                .collect(),
+            ItemData::Text { .. } => Vec::new(),
+        }
+    }
+
+    fn image_entry_from_path(&self, path: &str) -> Option<ImageEntry> {
+        let decoded = image::open(path).ok()?;
+        let rgba = decoded.to_rgba8();
+        let image_id = image_content_id(decoded.width(), decoded.height(), rgba.as_raw());
+        let image_dir = self.data_dir.join("images");
+        fs::create_dir_all(&image_dir).ok()?;
+        let destination = image_dir.join(format!("{image_id}.png"));
+        if !destination.exists() {
+            decoded
+                .save_with_format(&destination, image::ImageFormat::Png)
+                .ok()?;
+        }
+        Some(ImageEntry {
+            image_id,
+            width: decoded.width(),
+            height: decoded.height(),
+            bytes: fs::metadata(path)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0),
+            ext: std::path::Path::new(path)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(|extension| extension.to_ascii_lowercase()),
+        })
     }
 
     /// Remove every unpinned item. Used by the restart-retention setting and
@@ -524,8 +614,9 @@ impl ItemStore {
         });
     }
 
-    /// Merge source into target. Images may merge with image collections and
-    /// files may merge with file bundles; text remains deliberately ungrouped.
+    /// Merge source into target. Pure images stay as image collections, while
+    /// any combination containing files becomes a file bundle. Text remains
+    /// deliberately ungrouped.
     pub fn merge(&mut self, source_id: &str, target_id: &str) -> Result<(), String> {
         if source_id == target_id {
             return Err("cannot merge item into itself".into());
@@ -543,63 +634,64 @@ impl ItemStore {
             .cloned()
             .ok_or("target not found")?;
 
-        let (merged_data, merged_entries) = match (&source.data, &target.data) {
-            (
-                ItemData::Files {
-                    paths: source_paths,
-                },
-                ItemData::Files {
-                    paths: target_paths,
-                },
-            ) => {
-                let mut combined = target_paths.clone();
-                for path in source_paths {
-                    if !combined.contains(path) {
-                        combined.push(path.clone());
-                    }
+        let source_is_pure_image = matches!(
+            source.data,
+            ItemData::Image { .. } | ItemData::ImageCollection { .. }
+        );
+        let target_is_pure_image = matches!(
+            target.data,
+            ItemData::Image { .. } | ItemData::ImageCollection { .. }
+        );
+
+        let (merged_data, merged_entries) = if source_is_pure_image && target_is_pure_image {
+            let to_images = |data: &ItemData| match data {
+                ItemData::Image {
+                    image_id,
+                    width,
+                    height,
+                    bytes,
+                    ext,
+                } => vec![ImageEntry {
+                    image_id: image_id.clone(),
+                    width: *width,
+                    height: *height,
+                    bytes: *bytes,
+                    ext: ext.clone(),
+                }],
+                ItemData::ImageCollection { images } => images.clone(),
+                _ => Vec::new(),
+            };
+            let mut combined = to_images(&target.data);
+            for image in to_images(&source.data) {
+                if !combined
+                    .iter()
+                    .any(|existing| existing.image_id == image.image_id)
+                {
+                    combined.push(image);
                 }
-                if combined.len() > MAX_STACK {
-                    return Err(format!("a stack can hold at most {MAX_STACK} files"));
-                }
-                let entries = file_entries(&combined);
-                (ItemData::Files { paths: combined }, Some(entries))
             }
-            (ItemData::Image { .. }, ItemData::Image { .. })
-            | (ItemData::ImageCollection { .. }, ItemData::Image { .. })
-            | (ItemData::Image { .. }, ItemData::ImageCollection { .. })
-            | (ItemData::ImageCollection { .. }, ItemData::ImageCollection { .. }) => {
-                let to_images = |data: &ItemData| match data {
-                    ItemData::Image {
-                        image_id,
-                        width,
-                        height,
-                        bytes,
-                        ext,
-                    } => vec![ImageEntry {
-                        image_id: image_id.clone(),
-                        width: *width,
-                        height: *height,
-                        bytes: *bytes,
-                        ext: ext.clone(),
-                    }],
-                    ItemData::ImageCollection { images } => images.clone(),
-                    _ => Vec::new(),
-                };
-                let mut combined = to_images(&target.data);
-                for image in to_images(&source.data) {
-                    if !combined
-                        .iter()
-                        .any(|existing| existing.image_id == image.image_id)
-                    {
-                        combined.push(image);
-                    }
-                }
-                if combined.len() > MAX_STACK {
-                    return Err(format!("a stack can hold at most {MAX_STACK} images"));
-                }
-                (ItemData::ImageCollection { images: combined }, None)
+            if combined.len() > MAX_STACK {
+                return Err(format!("a stack can hold at most {MAX_STACK} images"));
             }
-            _ => return Err("only images can merge with images, and files with files".into()),
+            (ItemData::ImageCollection { images: combined }, None)
+        } else if !matches!(source.data, ItemData::Text { .. })
+            && !matches!(target.data, ItemData::Text { .. })
+        {
+            let source_paths = self.stack_paths(&source.data);
+            let target_paths = self.stack_paths(&target.data);
+            let mut combined = target_paths;
+            for path in source_paths {
+                if !combined.contains(&path) {
+                    combined.push(path);
+                }
+            }
+            if combined.len() > MAX_STACK {
+                return Err(format!("a stack can hold at most {MAX_STACK} files"));
+            }
+            let entries = file_entries(&combined);
+            (ItemData::Files { paths: combined }, Some(entries))
+        } else {
+            return Err("text and links cannot be grouped".into());
         };
 
         self.items.retain(|item| item.id != source_id);
@@ -690,19 +782,47 @@ impl ItemStore {
                         .filter(|p| !split_paths.contains(p))
                         .cloned()
                         .collect();
+                    if remaining.is_empty() {
+                        return Err("cannot ungroup every item from a stack".into());
+                    }
                     self.items[idx].data = ItemData::Files {
                         paths: remaining.clone(),
                     };
                     self.items[idx].entries = Some(file_entries(&remaining));
+
+                    let selected_images = selected
+                        .iter()
+                        .map(|path| self.image_entry_from_path(path))
+                        .collect::<Option<Vec<_>>>();
+                    let (data, entries) = match selected_images {
+                        Some(images) if images.len() == 1 => {
+                            let image = &images[0];
+                            (
+                                ItemData::Image {
+                                    image_id: image.image_id.clone(),
+                                    width: image.width,
+                                    height: image.height,
+                                    bytes: image.bytes,
+                                    ext: image.ext.clone(),
+                                },
+                                None,
+                            )
+                        }
+                        Some(images) => (ItemData::ImageCollection { images }, None),
+                        None => (
+                            ItemData::Files {
+                                paths: selected.clone(),
+                            },
+                            Some(file_entries(&selected)),
+                        ),
+                    };
                     ClipboardItem {
                         id: uuid::Uuid::new_v4().to_string(),
-                        data: ItemData::Files {
-                            paths: selected.clone(),
-                        },
+                        data,
                         captured_at: chrono::Utc::now().timestamp_millis(),
                         hit_count: 1,
                         pinned: false,
-                        entries: Some(file_entries(&selected)),
+                        entries,
                     }
                 } else {
                     return Err("no file selected".into());
@@ -732,16 +852,6 @@ fn stable_stored_image_id(image_dir: &std::path::Path, image_id: &str) -> String
         }
     }
     stable_id
-}
-
-fn image_ids(data: &ItemData) -> Vec<&str> {
-    match data {
-        ItemData::Image { image_id, .. } => vec![image_id.as_str()],
-        ItemData::ImageCollection { images } => {
-            images.iter().map(|image| image.image_id.as_str()).collect()
-        }
-        ItemData::Text { .. } | ItemData::Files { .. } => Vec::new(),
-    }
 }
 
 #[cfg(test)]
@@ -821,6 +931,9 @@ mod tests {
 
         assert!(store.touch(&first_id));
         assert_eq!(store.items[0].id, first_id);
+        let previous_hits = store.items[0].hit_count;
+        assert!(store.record_use(&first_id));
+        assert_eq!(store.items[0].hit_count, previous_hits + 1);
         assert_eq!(store.delete_batch(std::slice::from_ref(&second_id)), 1);
         assert!(store.items.iter().all(|item| item.id != second_id));
         let _ = fs::remove_dir_all(&store.data_dir);
@@ -883,6 +996,61 @@ mod tests {
             .items
             .iter()
             .all(|item| { matches!(&item.data, ItemData::Files { paths } if paths.len() == 1) }));
+        let _ = fs::remove_dir_all(&store.data_dir);
+    }
+
+    #[test]
+    fn captured_images_merge_with_files_and_ungroup_back_to_images() {
+        let mut store = test_store();
+        let image_dir = store.data_dir.join("images");
+        fs::create_dir_all(&image_dir).unwrap();
+        let captured_path = image_dir.join("captured.png");
+        image::RgbaImage::from_pixel(3, 2, image::Rgba([246, 199, 214, 255]))
+            .save(&captured_path)
+            .unwrap();
+        let document_path = store.data_dir.join("notes.txt");
+        fs::write(&document_path, b"notes").unwrap();
+
+        store.add_files(vec![document_path.to_string_lossy().to_string()]);
+        let target_id = store.items[0].id.clone();
+        store.add(ItemData::Image {
+            image_id: "captured".to_string(),
+            width: 3,
+            height: 2,
+            bytes: fs::metadata(&captured_path).unwrap().len(),
+            ext: Some("png".to_string()),
+        });
+        let source_id = store.items[0].id.clone();
+
+        store.merge(&source_id, &target_id).unwrap();
+        let mixed_paths = match &store.items[0].data {
+            ItemData::Files { paths } => {
+                assert_eq!(paths.len(), 2);
+                paths.clone()
+            }
+            _ => panic!("an image plus a file should become a mixed file stack"),
+        };
+        assert_eq!(store.items[0].entries.as_ref().unwrap().len(), 2);
+
+        let managed_path = mixed_paths
+            .iter()
+            .find(|path| path.ends_with("captured.png"))
+            .unwrap()
+            .clone();
+        store
+            .split(&target_id, None, Some(&vec![managed_path]))
+            .unwrap();
+        assert!(store.items.iter().any(|item| matches!(
+            item.data,
+            ItemData::Image {
+                width: 3,
+                height: 2,
+                ..
+            }
+        )));
+        assert!(store.items.iter().any(
+            |item| matches!(&item.data, ItemData::Files { paths } if paths == &vec![document_path.to_string_lossy().to_string()])
+        ));
         let _ = fs::remove_dir_all(&store.data_dir);
     }
 

@@ -1,9 +1,10 @@
 import { motion } from "framer-motion";
 import { HotkeyRecorder } from "./HotkeyRecorder";
-import { SettingsData } from "../settings";
+import { DisplayOption, SettingsData } from "../settings";
 
 interface SettingsProps {
   settings: SettingsData;
+  displays: DisplayOption[];
   onUpdate: (patch: Partial<SettingsData>) => void;
   onClose: () => void;
   onReset: () => void;
@@ -104,7 +105,7 @@ function SettingsSection({
   );
 }
 
-export function Settings({ settings, onUpdate, onClose, onReset }: SettingsProps) {
+export function Settings({ settings, displays, onUpdate, onClose, onReset }: SettingsProps) {
   return (
     <motion.div
       className="settings-view"
@@ -179,6 +180,22 @@ export function Settings({ settings, onUpdate, onClose, onReset }: SettingsProps
         </SettingsSection>
 
         <SettingsSection eyebrow="Layout" title="Shelf appearance">
+          {displays.length > 1 && (
+            <label className="settings-control settings-select-control">
+              <span className="settings-control-copy">
+                <strong>Display</strong>
+                <small>Choose the screen whose edge holds the shelf.</small>
+              </span>
+              <select
+                value={displays.some((display) => display.id === settings.displayId) ? settings.displayId : displays.find((display) => display.primary)?.id || displays[0].id}
+                onChange={(event) => onUpdate({ displayId: event.target.value })}
+              >
+                {displays.map((display) => (
+                  <option key={display.id} value={display.id}>{display.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="settings-control settings-segment-control">
             <span className="settings-control-copy">
               <strong>Screen edge</strong>

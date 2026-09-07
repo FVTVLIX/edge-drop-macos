@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ClipboardItem, DragRequest, useAppStore } from "../store";
 import {
@@ -66,10 +66,8 @@ function kindLabel(item: ClipboardItem): string {
   }
 }
 
-function mergeFamily(item: ClipboardItem): "images" | "files" | "text" {
-  if (item.data.kind === "image" || item.data.kind === "image-collection") return "images";
-  if (item.data.kind === "files") return "files";
-  return "text";
+function canMerge(item: ClipboardItem): boolean {
+  return item.data.kind !== "text";
 }
 
 export const ClipboardCard = memo(function ClipboardCard({ item }: Props) {
@@ -84,6 +82,7 @@ export const ClipboardCard = memo(function ClipboardCard({ item }: Props) {
   const [copied, setCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [, setTimeTick] = useState(0);
+  const pointerStartRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setTimeTick((tick) => tick + 1), 30_000);
@@ -101,8 +100,8 @@ export const ClipboardCard = memo(function ClipboardCard({ item }: Props) {
     internalDragReq &&
     !isDragSource &&
     draggedItem &&
-    mergeFamily(draggedItem) !== "text" &&
-    mergeFamily(draggedItem) === mergeFamily(item)
+    canMerge(draggedItem) &&
+    canMerge(item)
   );
 
   useEffect(() => {
@@ -155,6 +154,7 @@ export const ClipboardCard = memo(function ClipboardCard({ item }: Props) {
   }, [setInternalDragReq]);
 
   const handleDragStart = useCallback((event: React.DragEvent, request: DragRequest) => {
+    if (pointerStartRef.current) pointerStartRef.current.moved = true;
     event.preventDefault();
     event.stopPropagation();
     startNativeDrag(request);
@@ -180,9 +180,29 @@ export const ClipboardCard = memo(function ClipboardCard({ item }: Props) {
         data-id={item.id}
         draggable
         onDragStart={(event) => handleDragStart(event, { id: item.id })}
+        onPointerDown={(event) => {
+          if (event.button === 0) {
+            pointerStartRef.current = { x: event.clientX, y: event.clientY, moved: false };
+          }
+        }}
+        onPointerMove={(event) => {
+          const start = pointerStartRef.current;
+          if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 5) {
+            start.moved = true;
+          }
+        }}
         onClick={(event) => {
           event.stopPropagation();
-          openPreview(item.id, event.currentTarget.getBoundingClientRect());
+          if (pointerStartRef.current?.moved) {
+            pointerStartRef.current = null;
+            return;
+          }
+          pointerStartRef.current = null;
+          if (useAppStore.getState().previewItemId === item.id) {
+            useAppStore.getState().closePreview();
+          } else {
+            openPreview(item.id, event.currentTarget.getBoundingClientRect());
+          }
         }}
         title="Click for a larger preview; drag to copy out"
       >

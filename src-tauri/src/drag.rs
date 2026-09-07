@@ -110,6 +110,7 @@ pub async fn start_native_drag(
     preview_size: u32,
 ) -> Result<(), String> {
     let paths = resolve_drag_paths(&item, &request)?;
+    let preview_is_folder = paths.len() == 1 && paths[0].is_dir();
     let preview_path = paths
         .iter()
         .find(|path| can_preview_as_image(path))
@@ -120,7 +121,7 @@ pub async fn start_native_drag(
 
     window
         .run_on_main_thread(move || {
-            let preview = compact_preview(preview_path.as_deref(), preview_size);
+            let preview = compact_preview(preview_path.as_deref(), preview_size, preview_is_folder);
 
             let result = drag::start_drag(
                 &main_window,
@@ -168,7 +169,10 @@ pub async fn start_native_drag(
         .map_err(|_| "native drag task ended before AppKit started the session".to_string())?
 }
 
-fn compact_preview(path: Option<&Path>, size: u32) -> drag::Image {
+fn compact_preview(path: Option<&Path>, size: u32, is_folder: bool) -> drag::Image {
+    if is_folder {
+        return folder_preview(size);
+    }
     let source = path
         .and_then(|path| image::open(path).ok())
         .or_else(|| image::load_from_memory(include_bytes!("../icons/128x128.png")).ok());
@@ -178,6 +182,53 @@ fn compact_preview(path: Option<&Path>, size: u32) -> drag::Image {
     let thumbnail = source.thumbnail(size, size);
     let mut encoded = std::io::Cursor::new(Vec::new());
     if thumbnail
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .is_ok()
+    {
+        drag::Image::Raw(encoded.into_inner())
+    } else {
+        drag::Image::Raw(include_bytes!("../icons/128x128.png").to_vec())
+    }
+}
+
+fn folder_preview(size: u32) -> drag::Image {
+    let size = size.max(40);
+    let mut canvas = image::RgbaImage::new(size, size);
+    let left = size / 8;
+    let right = size - left;
+    let tab_top = size / 5;
+    let tab_right = left + size * 9 / 20;
+    let body_top = size * 7 / 20;
+    let bottom = size * 7 / 8;
+
+    for y in body_top + size / 14..bottom + size / 18 {
+        for x in left + size / 18..right + size / 24 {
+            if x < size && y < size {
+                canvas.put_pixel(x, y, image::Rgba([88, 56, 14, 70]));
+            }
+        }
+    }
+    for y in tab_top..body_top + size / 12 {
+        for x in left..tab_right {
+            canvas.put_pixel(x, y, image::Rgba([255, 210, 92, 255]));
+        }
+    }
+    for y in body_top..bottom {
+        for x in left..right {
+            let highlight = ((bottom - y) * 28 / (bottom - body_top).max(1)) as u8;
+            canvas.put_pixel(
+                x,
+                y,
+                image::Rgba([255, 205u8.saturating_add(highlight), 92, 255]),
+            );
+        }
+    }
+    for x in left..right {
+        canvas.put_pixel(x, body_top, image::Rgba([255, 232, 151, 255]));
+    }
+
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    if image::DynamicImage::ImageRgba8(canvas)
         .write_to(&mut encoded, image::ImageFormat::Png)
         .is_ok()
     {
@@ -212,12 +263,24 @@ mod tests {
 
     #[test]
     fn native_drag_preview_is_bounded_to_the_configured_size() {
-        let drag::Image::Raw(bytes) = compact_preview(None, 48) else {
+        let drag::Image::Raw(bytes) = compact_preview(None, 48, false) else {
             panic!("preview should be encoded in memory");
         };
         let decoded = image::load_from_memory(&bytes).unwrap();
         let (width, height) = decoded.dimensions();
         assert!(width <= 48);
         assert!(height <= 48);
+    }
+
+    #[test]
+    fn folder_drag_preview_uses_a_pastel_folder_instead_of_the_app_icon() {
+        let drag::Image::Raw(bytes) = folder_preview(64) else {
+            panic!("folder preview should be encoded in memory");
+        };
+        let decoded = image::load_from_memory(&bytes).unwrap().to_rgba8();
+        let center = decoded.get_pixel(32, 32);
+        assert!(center[0] > 240);
+        assert!(center[1] > 180);
+        assert!(center[2] < 140);
     }
 }

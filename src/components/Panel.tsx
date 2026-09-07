@@ -5,7 +5,7 @@ import { ClipboardCard } from "./ClipboardCard";
 import { Settings } from "./Settings";
 import { PreviewFlyout } from "./PreviewFlyout";
 import { ClearMenu } from "./ClearMenu";
-import { DEFAULT_SETTINGS, SettingsData } from "../settings";
+import { DEFAULT_SETTINGS, DisplayOption, SettingsData } from "../settings";
 import { GearIcon, ChevronUpIcon, ChevronDownIcon } from "./icons";
 import { filterItems } from "../lib/filterItems";
 import type { TypeFilter } from "../lib/filterItems";
@@ -50,6 +50,7 @@ export function Panel() {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<SettingsData>(DEFAULT_SETTINGS);
+  const [displays, setDisplays] = useState<DisplayOption[]>([]);
   const [settingsReady, setSettingsReady] = useState(false);
 
   const togglePinnedCollapsed = () => {
@@ -69,9 +70,13 @@ export function Panel() {
 
   useEffect(() => {
     import("@tauri-apps/api/core")
-      .then(({ invoke }) => invoke<SettingsData>("get_settings"))
-      .then((loaded) => {
+      .then(async ({ invoke }) => Promise.all([
+        invoke<SettingsData>("get_settings"),
+        invoke<DisplayOption[]>("get_displays"),
+      ]))
+      .then(([loaded, availableDisplays]) => {
         setSettings(loaded);
+        setDisplays(availableDisplays);
         setSettingsReady(true);
       })
       .catch((error) => {
@@ -79,6 +84,14 @@ export function Panel() {
         pushToast(`Couldn't load settings: ${String(error)}`, "error");
       });
   }, [pushToast]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<DisplayOption[]>("get_displays"))
+      .then(setDisplays)
+      .catch(() => undefined);
+  }, [settingsOpen]);
 
   useEffect(() => {
     if (!settingsReady) return;
@@ -225,21 +238,16 @@ export function Panel() {
           pointerEvents: open ? "auto" : "none",
           originX: isRight ? 1 : 0,
           originY: 0.5,
-          clipPath,
+
         }}
         animate={{
-          scale: open && settings.bounceAnimation ? [0.94, 1.02, 0.99, 1] : 1,
-          filter: open ? "blur(0px)" : "blur(16px)",
+          clipPath,
+          x: open ? 0 : isRight ? 24 : -24,
+          scale: open && settings.bounceAnimation && !settings.reduceMotion ? [0.94, 1.02, 0.99, 1] : 1,
         }}
         transition={{
-          scale: {
-            duration: settings.bounceAnimation ? 0.55 : 0.22,
-            ease: [0.22, 1, 0.36, 1],
-          },
-          filter: {
-            duration: open ? 0.8 : 0.45,
-            ease: open ? [0.16, 1, 0.3, 1] : [0.4, 0, 0.2, 1],
-          },
+          duration: settings.reduceMotion ? 0 : settings.bounceAnimation ? 0.55 : 0.32,
+          ease: [0.22, 1, 0.36, 1],
         }}
       >
         {/* Corner flares */}
@@ -259,6 +267,9 @@ export function Panel() {
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
           onDrop={onDrop}
+          onClick={(event) => {
+            if (!(event.target as HTMLElement).closest("button, input, textarea, a, [data-id]")) closePreview();
+          }}
         >
           <SplitDropZone />
 
@@ -382,6 +393,7 @@ export function Panel() {
               <Settings
                 key="settings"
                 settings={settings}
+                displays={displays}
                 onUpdate={(patch) => setSettings((current) => ({ ...current, ...patch }))}
                 onClose={() => setSettingsOpen(false)}
                 onReset={() => setSettings({ ...DEFAULT_SETTINGS })}

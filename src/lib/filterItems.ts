@@ -10,7 +10,7 @@ function basename(path: string): string {
 export function isImageItem(item: ClipboardItem): boolean {
   if (item.data.kind === "image" || item.data.kind === "image-collection") return true;
   if (item.data.kind !== "files" || item.data.paths.length === 0) return false;
-  return item.data.paths.every((path, index) =>
+  return item.data.paths.some((path, index) =>
     !item.entries?.[index]?.isDirectory &&
     (item.entries?.[index]?.isImage || getFileKind(path).kind === "image")
   );
@@ -22,7 +22,7 @@ export function matchesType(item: ClipboardItem, filter: TypeFilter): boolean {
     case "text": return item.data.kind === "text" && !item.data.isUrl;
     case "links": return item.data.kind === "text" && item.data.isUrl;
     case "images": return isImageItem(item);
-    case "files": return item.data.kind === "files" && !isImageItem(item);
+    case "files": return item.data.kind === "files";
   }
 }
 

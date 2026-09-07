@@ -5,6 +5,8 @@ use std::path::PathBuf;
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    #[serde(default = "default_display_id")]
+    pub display_id: String,
     #[serde(default = "default_edge_position")]
     pub edge_position: String,
     #[serde(default = "default_toggle_hotkey")]
@@ -42,6 +44,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            display_id: default_display_id(),
             edge_position: default_edge_position(),
             toggle_hotkey: default_toggle_hotkey(),
             hot_zone_height: 0.25,
@@ -84,6 +87,9 @@ impl AppSettings {
     }
 
     pub fn sanitized(mut self) -> Self {
+        if self.display_id.trim().is_empty() || self.display_id.len() > 240 {
+            self.display_id = default_display_id();
+        }
         if self.edge_position != "right" {
             self.edge_position = "left".to_string();
         }
@@ -126,6 +132,10 @@ fn default_edge_position() -> String {
     "left".to_string()
 }
 
+fn default_display_id() -> String {
+    "primary".to_string()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -153,6 +163,7 @@ mod tests {
     #[test]
     fn user_settings_are_sanitized_to_supported_runtime_ranges() {
         let settings = AppSettings {
+            display_id: String::new(),
             edge_position: "bottom".to_string(),
             toggle_hotkey: String::new(),
             hot_zone_height: 4.0,
@@ -186,6 +197,7 @@ mod tests {
         assert_eq!(settings.drag_preview_size, 128);
         assert_eq!(settings.ui_style, "modern");
         assert_eq!(settings.edge_position, "left");
+        assert_eq!(settings.display_id, "primary");
         assert_eq!(settings.toggle_hotkey, "Alt+KeyC");
         assert_eq!(settings.auto_delete_hours, 0);
         assert_eq!(settings.vertical_offset, 1.0);

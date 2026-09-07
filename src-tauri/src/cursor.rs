@@ -27,12 +27,76 @@ enum EdgeState {
 const KEEP_OPEN_PX: f64 = 400.0;
 const START_CLOSE_PX: f64 = 420.0;
 const FLYOUT_KEEP_OPEN_PX: f64 = crate::window::WINDOW_WIDTH;
+const REST_FRAMES_REQUIRED: u8 = 3;
+const MAX_INTENT_SPEED_PX_PER_MS: f64 = 1.5;
+
+#[derive(Default)]
+struct SeamTracker {
+    last_point: Option<(f64, f64)>,
+    last_distance: Option<f64>,
+    last_time: Option<std::time::Instant>,
+    crossing_pending: bool,
+    rest_streak: u8,
+}
+
+impl SeamTracker {
+    fn probe(
+        &mut self,
+        x: f64,
+        y: f64,
+        edge_distance: f64,
+        hot_zone_width: f64,
+        now: std::time::Instant,
+    ) -> bool {
+        let speed = self
+            .last_point
+            .zip(self.last_time)
+            .map(|((last_x, last_y), last_time)| {
+                let elapsed_ms = now.duration_since(last_time).as_secs_f64() * 1000.0;
+                let elapsed_ms = elapsed_ms.clamp(1.0, 250.0);
+                (x - last_x).hypot(y - last_y) / elapsed_ms
+            });
+        let slow_enough = speed.is_none_or(|speed| speed <= MAX_INTENT_SPEED_PX_PER_MS);
+        let crossed = self.last_distance.is_some_and(|last_distance| {
+            (last_distance < 0.0 && edge_distance >= 0.0)
+                || (last_distance >= 0.0 && edge_distance < 0.0)
+        });
+
+        if crossed {
+            self.crossing_pending = true;
+            self.rest_streak = 0;
+        } else if self.crossing_pending {
+            if edge_distance >= 0.0 && edge_distance <= hot_zone_width && slow_enough {
+                self.rest_streak = self.rest_streak.saturating_add(1);
+            } else {
+                self.rest_streak = 0;
+            }
+            if self.rest_streak >= REST_FRAMES_REQUIRED {
+                self.crossing_pending = false;
+            }
+        }
+
+        self.last_point = Some((x, y));
+        self.last_distance = Some(edge_distance);
+        self.last_time = Some(now);
+
+        !self.crossing_pending
+            && edge_distance >= 0.0
+            && edge_distance <= hot_zone_width
+            && slow_enough
+    }
+}
 
 /// Poll cursor position using Tauri's safe API (no raw objc2).
 pub async fn run_cursor_poll(app_handle: AppHandle, state: Arc<AppState>) {
     let mut edge_state = EdgeState::Closed;
     let mut last_edge_state = false;
     let mut accepting_input = false;
+    let mut cached_display_id = String::new();
+    let mut cached_edge_position = String::new();
+    let mut display = get_display_info(&app_handle, "primary");
+    let mut display_refreshed_at = std::time::Instant::now();
+    let mut seam_tracker = SeamTracker::default();
 
     loop {
         {
@@ -50,10 +114,28 @@ pub async fn run_cursor_poll(app_handle: AppHandle, state: Arc<AppState>) {
             }
         };
 
-        let display = get_display_info(&app_handle);
+        let settings = state.settings.read().await.clone();
+        if cached_display_id != settings.display_id
+            || cached_edge_position != settings.edge_position
+            || display_refreshed_at.elapsed() >= std::time::Duration::from_secs(2)
+        {
+            let next_display = get_display_info(&app_handle, &settings.display_id);
+            if cached_display_id != settings.display_id
+                || cached_edge_position != settings.edge_position
+                || next_display.x != display.x
+                || next_display.y != display.y
+                || next_display.width != display.width
+                || next_display.height != display.height
+            {
+                seam_tracker = SeamTracker::default();
+            }
+            display = next_display;
+            cached_display_id = settings.display_id.clone();
+            cached_edge_position = settings.edge_position.clone();
+            display_refreshed_at = std::time::Instant::now();
+        }
         let client_x = cursor_pos.x as f64 - display.x;
         let client_y = cursor_pos.y as f64 - display.y;
-        let settings = state.settings.read().await.clone();
         let is_right = settings.edge_position == "right";
         let panel_height = display.height * settings.panel_height;
         let panel_top = (display.height - panel_height) * settings.vertical_offset;
@@ -77,8 +159,13 @@ pub async fn run_cursor_poll(app_handle: AppHandle, state: Arc<AppState>) {
             }
             suppress_until.is_some()
         };
-        let at_edge = edge_distance >= -30.0 * display.scale
-            && edge_distance <= settings.hot_zone_width * display.scale;
+        let at_edge = seam_tracker.probe(
+            cursor_pos.x as f64,
+            cursor_pos.y as f64,
+            edge_distance,
+            settings.hot_zone_width * display.scale,
+            std::time::Instant::now(),
+        );
         let in_zone = client_y >= zone_top && client_y <= zone_top + zone_height;
         let in_edge = settings.hover_activation && !suppressed && at_edge && in_zone;
 
@@ -214,8 +301,8 @@ struct DisplayInfo {
     scale: f64,
 }
 
-fn get_display_info(handle: &AppHandle) -> DisplayInfo {
-    if let Ok(Some(monitor)) = handle.primary_monitor() {
+fn get_display_info(handle: &AppHandle, display_id: &str) -> DisplayInfo {
+    if let Ok(Some(monitor)) = crate::window::resolve_monitor(handle, display_id) {
         let size = monitor.size();
         let pos = monitor.position();
         return DisplayInfo {
@@ -232,5 +319,59 @@ fn get_display_info(handle: &AppHandle) -> DisplayInfo {
         width: 1920.0,
         height: 1080.0,
         scale: 1.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seam_crossing_requires_three_slow_frames_on_the_selected_display() {
+        let started = std::time::Instant::now();
+        let mut tracker = SeamTracker::default();
+        assert!(!tracker.probe(99.0, 50.0, -1.0, 4.0, started));
+        assert!(!tracker.probe(
+            100.0,
+            50.0,
+            0.0,
+            4.0,
+            started + std::time::Duration::from_millis(16)
+        ));
+        assert!(!tracker.probe(
+            101.0,
+            50.0,
+            1.0,
+            4.0,
+            started + std::time::Duration::from_millis(32)
+        ));
+        assert!(!tracker.probe(
+            101.0,
+            50.0,
+            1.0,
+            4.0,
+            started + std::time::Duration::from_millis(48)
+        ));
+        assert!(tracker.probe(
+            101.0,
+            50.0,
+            1.0,
+            4.0,
+            started + std::time::Duration::from_millis(64)
+        ));
+    }
+
+    #[test]
+    fn fast_travel_through_the_edge_band_does_not_arm() {
+        let started = std::time::Instant::now();
+        let mut tracker = SeamTracker::default();
+        assert!(tracker.probe(90.0, 50.0, 3.0, 4.0, started));
+        assert!(!tracker.probe(
+            130.0,
+            50.0,
+            2.0,
+            4.0,
+            started + std::time::Duration::from_millis(16)
+        ));
     }
 }

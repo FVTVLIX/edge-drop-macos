@@ -112,6 +112,11 @@ async fn get_settings(
 }
 
 #[tauri::command]
+fn get_displays(app: tauri::AppHandle) -> Result<Vec<window::DisplayOption>, String> {
+    window::display_options(&app).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn update_settings(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -167,10 +172,13 @@ async fn update_settings(
         }
     }
     *state.settings.write().await = settings.clone();
-    if previous.edge_position != settings.edge_position {
-        if let (Some(window), Ok(Some(monitor))) =
-            (app.get_webview_window("main"), app.primary_monitor())
-        {
+    if previous.edge_position != settings.edge_position
+        || previous.display_id != settings.display_id
+    {
+        if let (Some(window), Ok(Some(monitor))) = (
+            app.get_webview_window("main"),
+            crate::window::resolve_monitor(&app, &settings.display_id),
+        ) {
             crate::window::position_window(&window, &monitor, &settings.edge_position)
                 .map_err(|error| error.to_string())?;
         }
@@ -265,7 +273,33 @@ async fn copy_item(
     state.clipboard_watcher.lock().await.begin_self_write();
     let result = clipboard_write::write_item(&item, &request);
     state.clipboard_watcher.lock().await.finish_self_write();
-    result
+    result?;
+    let mut store = state.item_store.lock().await;
+    if store.record_use(&request.id) {
+        let items = store.list().to_vec();
+        if let Some(window) = store.get_window() {
+            let _ = window.emit(
+                "clipboard-update",
+                crate::clipboard::ClipboardUpdate { items },
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn record_item_use(state: tauri::State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
+    let mut store = state.item_store.lock().await;
+    if store.record_use(&id) {
+        let items = store.list().to_vec();
+        if let Some(window) = store.get_window() {
+            let _ = window.emit(
+                "clipboard-update",
+                crate::clipboard::ClipboardUpdate { items },
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Copy an item or stack member to the pasteboard, return focus to the
@@ -576,6 +610,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_items,
             get_settings,
+            get_displays,
             update_settings,
             set_hotkey_paused,
             set_preview_open,
@@ -585,6 +620,7 @@ pub fn run() {
             toggle_pin,
             clear_items,
             copy_item,
+            record_item_use,
             paste_item,
             open_accessibility_settings,
             quit_app,

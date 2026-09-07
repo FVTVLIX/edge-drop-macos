@@ -14,7 +14,7 @@ This port is under active development. It is not currently an official release o
 - Native macOS clipboard writes for text, images, files, and folders
 - Click-to-paste back into the previously active app (with macOS Accessibility permission)
 - Spreadsheet-safe TSV and rich HTML clipboard output
-- Image and file stacks with a maximum of 10 members
+- Image, file, and mixed image/file stacks with a maximum of 10 members
 - Stack grouping, merging, expansion, individual member drag/copy, and ungrouping
 - Rich image, file, text, and offline URL preview flyouts
 - Image and SVG previews plus Finder-aware file/folder labels
@@ -24,11 +24,11 @@ This port is under active development. It is not currently an official release o
 - Clipboard deduplication and self-copy suppression
 - Re-copy promotion and optional move-pasted-items-to-top behavior
 - Sensitive clipboard-format filtering and incognito mode
-- Configurable edge position, trigger area, panel sizing, history limit, appearance, and drag-preview size
+- Configurable display, edge position, trigger area, panel sizing, history limit, appearance, and drag-preview size
 - Configurable vertical shelf position, trigger alignment, shortcut-only activation, and open animation
 - Configurable global shelf shortcut and macOS menu bar integration
 - Native launch-at-login, Show in Finder actions, and an in-app quit control
-- Adaptive cursor polling to reduce idle CPU wakeups
+- Seam-aware edge intent and adaptive cursor polling to prevent accidental activation while reducing idle CPU wakeups
 
 ## Technology
 
@@ -69,8 +69,12 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ### Build the macOS application
 
 ```bash
-npm run tauri build
+npm run tauri build -- --target universal-apple-darwin
 ```
+
+Install both Rust targets first: `rustup target add aarch64-apple-darwin x86_64-apple-darwin`. The universal build produces an app and DMG under `src-tauri/target/universal-apple-darwin/release/bundle/`.
+
+See [0.1.1 release notes](docs/RELEASE-0.1.1.md) for the upstream review and included changes.
 
 Unsigned local builds may trigger Gatekeeper warnings when shared with another Mac. A broadly distributed release should be signed and notarized with an Apple Developer ID.
 

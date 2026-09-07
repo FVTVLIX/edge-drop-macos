@@ -47,7 +47,8 @@ export default function App() {
     (async () => {
       unlistenDrop = await getCurrentWindow().onDragDropEvent(async (event) => {
         if (event.payload.type === "drop" && event.payload.paths.length > 0) {
-          if (useAppStore.getState().internalDragReq) return;
+          const dragState = useAppStore.getState();
+          if (dragState.internalDragReq || Date.now() < dragState.internalDragGuardUntil) return;
           try {
             const { invoke } = await import("@tauri-apps/api/core");
             const items: ClipboardItem[] = await invoke("handle_file_drop", {
@@ -85,13 +86,22 @@ export default function App() {
           const element = document.elementFromPoint(event.payload.x, event.payload.y);
           const targetCard = element?.closest<HTMLElement>(".item-main");
           const targetId = targetCard?.dataset.id;
+          const splitTarget = element?.closest<HTMLElement>(".split-dropzone");
           const isSubitem = Boolean(request.imageId || request.paths?.length);
 
           if (targetId && targetId !== request.id) {
             await state.mergeItems(request.id, targetId);
-          } else if (!targetId && isSubitem) {
+          } else if (splitTarget && isSubitem) {
             await state.splitItem(request.id, request.imageId, request.paths);
           }
+        } else if (
+          event.payload.result === "dropped" &&
+          !event.payload.inside &&
+          !request.imageId &&
+          !request.paths?.length
+        ) {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("record_item_use", { id: request.id });
         }
       } catch (error) {
         state.pushToast(

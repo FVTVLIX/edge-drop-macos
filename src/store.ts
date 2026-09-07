@@ -52,6 +52,7 @@ interface AppState {
   typeFilter: TypeFilter;
   setTypeFilter: (filter: TypeFilter) => void;
   internalDragReq: DragRequest | null;
+  internalDragGuardUntil: number;
   setInternalDragReq: (req: DragRequest | null) => void;
   previewItemId: string | null;
   previewItemRect: DOMRect | null;
@@ -82,7 +83,11 @@ export const useAppStore = create<AppState>((set) => ({
   typeFilter: "all",
   setTypeFilter: (typeFilter) => set({ typeFilter }),
   internalDragReq: null,
-  setInternalDragReq: (req) => set({ internalDragReq: req }),
+  internalDragGuardUntil: 0,
+  setInternalDragReq: (req) => set({
+    internalDragReq: req,
+    internalDragGuardUntil: req ? Number.POSITIVE_INFINITY : Date.now() + 1500,
+  }),
   previewItemId: null,
   previewItemRect: null,
   openPreview: (id, rect) => set({ previewItemId: id, previewItemRect: rect }),

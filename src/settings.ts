@@ -1,4 +1,5 @@
 export interface SettingsData {
+  displayId: string;
   edgePosition: "left" | "right";
   toggleHotkey: string;
   hotZoneHeight: number;
@@ -22,7 +23,14 @@ export interface SettingsData {
   uiStyle: "modern" | "compact";
 }
 
+export interface DisplayOption {
+  id: string;
+  label: string;
+  primary: boolean;
+}
+
 export const DEFAULT_SETTINGS: SettingsData = {
+  displayId: "primary",
   edgePosition: "left",
   toggleHotkey: "Alt+KeyC",
   hotZoneHeight: 0.25,
